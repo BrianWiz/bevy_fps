@@ -1,8 +1,8 @@
 use crate::components::LocallyControlled;
 use crate::input::PlayerInputController;
+use shared::avian3d::spatial_query::SpatialQuery;
 use shared::bevy::prelude::*;
 use shared::bevy_quinnet::shared::ClientId;
-use shared::bevy_rapier3d::prelude::*;
 use shared::character::*;
 use shared::utils::move_towards;
 
@@ -49,7 +49,7 @@ fn spawn_character_visuals(
 pub fn move_system(
     fixed_time: Res<Time<Fixed>>,
     mut input_controller: ResMut<PlayerInputController>,
-    mut physics: ResMut<RapierContext>,
+    mut spatial_query: SpatialQuery,
     mut characters: Query<
         (&mut CharacterState, &mut Transform, &CharacterConstants),
         With<LocallyControlled>,
@@ -59,7 +59,7 @@ pub fn move_system(
     {
         move_character(
             input_controller.latest_input.compute_wish_dir(),
-            &mut physics,
+            &mut spatial_query,
             &mut char_state,
             &mut char_xform,
             char_constants,

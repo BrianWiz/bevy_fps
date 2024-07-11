@@ -1,10 +1,10 @@
+use shared::avian3d::prelude::*;
 use shared::bevy::app::ScheduleRunnerPlugin;
 use shared::bevy::asset::LoadedFolder;
 use shared::bevy::log::LogPlugin;
 use shared::bevy::prelude::*;
 use shared::bevy_common_assets::ron::RonAssetPlugin;
 use shared::bevy_quinnet::server::QuinnetServerPlugin;
-use shared::bevy_rapier3d::prelude::*;
 use shared::resources::DataAssetHandles;
 use shared::weapons::WeaponConfig;
 use std::time::Duration;
@@ -26,10 +26,11 @@ fn main() {
                 1.0 / 200.0,
             ))),
             AssetPlugin::default(),
+            HierarchyPlugin::default(), // needed by Avian
             RonAssetPlugin::<WeaponConfig>::new(&["weapon.ron"]),
             LogPlugin::default(),
             QuinnetServerPlugin::default(),
-            RapierPhysicsPlugin::<NoUserData>::default(),
+            PhysicsPlugins::default(),
         ))
         //====================================================
         // systems at startup
@@ -60,7 +61,7 @@ fn main() {
         //====================================================
         .insert_resource(net::Application::default())
         .insert_resource(SceneSpawner::default())
-        .insert_resource(Assets::<Mesh>::default())
+        .insert_resource(Assets::<Mesh>::default()) // needed by Avian
         .insert_resource(DataFolder::default())
         .init_resource::<DataAssetHandles>()
         //====================================================
@@ -87,8 +88,8 @@ fn setup(
             transform: Transform::from_translation(Vec3::new(0.0, -0.5, 0.0)),
             ..default()
         },
-        Collider::cuboid(5.0, 0.5, 5.0),
-        RigidBody::Fixed,
+        Collider::cuboid(10.0, 1.0, 10.0),
+        RigidBody::Static,
     ));
 
     // wall 1.
@@ -97,8 +98,8 @@ fn setup(
             transform: Transform::from_translation(Vec3::new(-5.0, 2.0, 0.0)),
             ..default()
         },
-        Collider::cuboid(0.5, 2.0, 5.0),
-        RigidBody::Fixed,
+        Collider::cuboid(1.0, 4.0, 10.0),
+        RigidBody::Static,
     ));
 
     // wall 2.
@@ -107,8 +108,8 @@ fn setup(
             transform: Transform::from_translation(Vec3::new(5.0, 2.0, 0.0)),
             ..default()
         },
-        Collider::cuboid(0.5, 2.0, 5.0),
-        RigidBody::Fixed,
+        Collider::cuboid(1.0, 4.0, 10.0),
+        RigidBody::Static,
     ));
 
     // wall 3.
@@ -117,8 +118,8 @@ fn setup(
             transform: Transform::from_translation(Vec3::new(0.0, 2.0, -5.0)),
             ..default()
         },
-        Collider::cuboid(5.0, 2.0, 0.5),
-        RigidBody::Fixed,
+        Collider::cuboid(10.0, 4.0, 1.0),
+        RigidBody::Static,
     ));
 
     // wall 4.
@@ -127,8 +128,8 @@ fn setup(
             transform: Transform::from_translation(Vec3::new(0.0, 2.0, 5.0)),
             ..default()
         },
-        Collider::cuboid(5.0, 2.0, 0.5),
-        RigidBody::Fixed,
+        Collider::cuboid(10.0, 4.0, 1.0),
+        RigidBody::Static,
     ));
 
     // pillar 1.
@@ -137,7 +138,7 @@ fn setup(
             transform: Transform::from_translation(Vec3::new(-1.0, 2.0, -1.0)),
             ..default()
         },
-        Collider::cylinder(4.0, 0.5),
-        RigidBody::Fixed,
+        Collider::cylinder(0.5, 8.0),
+        RigidBody::Static,
     ));
 }

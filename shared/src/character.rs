@@ -1,7 +1,7 @@
 use crate::protocol::CharacterSnapshot;
+use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy_quinnet::shared::ClientId;
-use bevy_rapier3d::prelude::*;
 
 const GRAVITY: f32 = 3.71; // mars gravity
 
@@ -75,7 +75,7 @@ pub fn spawn_character(
 
 pub fn move_character(
     wish_dir: Vec3,
-    physics: &mut ResMut<RapierContext>,
+    spatial_query: &SpatialQuery,
     state: &mut CharacterState,
     transform: &mut Transform,
     constants: &CharacterConstants,
@@ -83,13 +83,13 @@ pub fn move_character(
 ) {
     let mut velocity = state.velocity;
 
-    // Decelerate the character
+    // drag
     velocity *= 1.0 - constants.move_drag * delta_seconds;
 
-    // apply gravity
+    // gravity
     velocity.y -= GRAVITY * delta_seconds;
 
-    // Accelerate the character in the desired direction
+    // acceleration
     velocity += accelerate(
         wish_dir,
         constants.move_speed,
@@ -98,47 +98,45 @@ pub fn move_character(
         delta_seconds,
     );
 
-    let mut remaining_time = delta_seconds;
+    let mut remaining_distance = velocity.length() * delta_seconds;
     let radius = 0.5;
-    let epsilon = 0.0001;
-    let filter = QueryFilter {
-        flags: QueryFilterFlags::EXCLUDE_SENSORS,
-        ..default()
-    };
+    let epsilon = 0.001;
+    let collider = Collider::sphere(radius);
+    let ignore_origin_penetration = true;
+
+    // we loop 4 times because we may move then collide, then slide, then collide again
     for _ in 0..4 {
-        let collider = Collider::ball(radius);
-        let ray_pos = transform.translation;
-        let ray_rot = transform.rotation;
-        let ray_dir = velocity.normalize_or_zero();
+        if remaining_distance < epsilon || velocity.length_squared() < epsilon * epsilon {
+            break;
+        }
 
-        let max_time_of_impact = velocity.length() * remaining_time;
+        let velocity_dir = velocity.normalize_or_zero();
 
-        let options = ShapeCastOptions {
-            max_time_of_impact,
-            ..default()
-        };
+        if let Some(first_hit) = spatial_query.cast_shape(
+            &collider,
+            transform.translation,
+            transform.rotation,
+            Dir3::new(velocity_dir).unwrap_or(Dir3::Z),
+            remaining_distance,
+            ignore_origin_penetration,
+            SpatialQueryFilter::default(),
+        ) {
+            // move to the point of impact
+            let move_distance = (first_hit.time_of_impact - epsilon).max(0.0);
+            transform.translation += velocity_dir * move_distance;
 
-        if let Some((_, toi)) =
-            physics.cast_shape(ray_pos, ray_rot, ray_dir, &collider, options, filter)
-        {
-            if let Some(details) = toi.details {
-                let normal = details.normal1;
+            // slide along the surface next move
+            let normal = first_hit.normal1;
+            velocity = velocity - normal * velocity.dot(normal);
 
-                // compute penetration depth
-                let penetration_depth = toi.time_of_impact * max_time_of_impact;
+            // prevents sticking
+            transform.translation += normal * epsilon;
 
-                // deproject
-                transform.translation += normal * (penetration_depth + (epsilon * remaining_time));
-
-                // slide
-                velocity -= normal * velocity.dot(normal) * (1.0 + epsilon);
-
-                // reduce time
-                remaining_time *= 1.0 - toi.time_of_impact;
-            }
+            // update remaining distance
+            remaining_distance -= move_distance;
         } else {
-            // No collision, move the full distance
-            transform.translation += velocity * remaining_time;
+            // no collision, move the full remaining distance
+            transform.translation += velocity_dir * remaining_distance;
             break;
         }
     }

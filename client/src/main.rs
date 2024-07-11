@@ -1,8 +1,8 @@
 use input::PlayerInputController;
+use shared::avian3d::prelude::*;
 use shared::bevy::prelude::*;
 use shared::bevy_quinnet::client::client_connected;
 use shared::bevy_quinnet::client::QuinnetClientPlugin;
-use shared::bevy_rapier3d::prelude::*;
 use shared::resources::DataAssetHandles;
 
 mod character;
@@ -17,7 +17,8 @@ fn main() {
     App::new()
         .add_plugins((
             DefaultPlugins,
-            RapierPhysicsPlugin::<NoUserData>::default(),
+            PhysicsPlugins::default(),
+            PhysicsDebugPlugin::default(),
             QuinnetClientPlugin::default(),
         ))
         //====================================================
@@ -96,8 +97,8 @@ fn setup_system(
             transform: Transform::from_translation(Vec3::new(0.0, -0.5, 0.0)),
             ..default()
         },
-        Collider::cuboid(5.0, 0.5, 5.0),
-        RigidBody::Fixed,
+        Collider::cuboid(10.0, 1.0, 10.0),
+        RigidBody::Static,
     ));
 
     // wall 1.
@@ -110,8 +111,8 @@ fn setup_system(
             transform: Transform::from_translation(Vec3::new(-5.0, 2.0, 0.0)),
             ..default()
         },
-        Collider::cuboid(0.5, 2.0, 5.0),
-        RigidBody::Fixed,
+        Collider::cuboid(1.0, 4.0, 10.0),
+        RigidBody::Static,
     ));
 
     // wall 2.
@@ -124,8 +125,8 @@ fn setup_system(
             transform: Transform::from_translation(Vec3::new(5.0, 2.0, 0.0)),
             ..default()
         },
-        Collider::cuboid(0.5, 2.0, 5.0),
-        RigidBody::Fixed,
+        Collider::cuboid(1.0, 4.0, 10.0),
+        RigidBody::Static,
     ));
 
     // wall 3.
@@ -138,8 +139,8 @@ fn setup_system(
             transform: Transform::from_translation(Vec3::new(0.0, 2.0, -5.0)),
             ..default()
         },
-        Collider::cuboid(5.0, 2.0, 0.5),
-        RigidBody::Fixed,
+        Collider::cuboid(10.0, 4.0, 1.0),
+        RigidBody::Static,
     ));
 
     // wall 4.
@@ -152,8 +153,8 @@ fn setup_system(
             transform: Transform::from_translation(Vec3::new(0.0, 2.0, 5.0)),
             ..default()
         },
-        Collider::cuboid(5.0, 2.0, 0.5),
-        RigidBody::Fixed,
+        Collider::cuboid(10.0, 4.0, 1.0),
+        RigidBody::Static,
     ));
 
     // pillar 1.
@@ -168,8 +169,8 @@ fn setup_system(
             transform: Transform::from_translation(Vec3::new(-1.0, 2.0, -1.0)),
             ..default()
         },
-        Collider::cylinder(4.0, 0.5),
-        RigidBody::Fixed,
+        Collider::cylinder(0.5, 8.0),
+        RigidBody::Static,
     ));
 
     // light

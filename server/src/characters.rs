@@ -1,13 +1,13 @@
+use shared::avian3d::spatial_query::SpatialQuery;
 use shared::bevy::prelude::*;
-use shared::bevy_rapier3d::plugin::RapierContext;
 use shared::character::*;
 
 use crate::net::Application;
 
 pub fn move_system(
     fixed_time: Res<Time<Fixed>>,
+    mut spatial_query: SpatialQuery,
     mut game_server: ResMut<Application>,
-    mut physics: ResMut<RapierContext>,
     mut characters: Query<(&mut CharacterState, &mut Transform, &CharacterConstants)>,
 ) {
     for (mut char_state, mut char_xform, char_constants) in characters.iter_mut() {
@@ -19,7 +19,7 @@ pub fn move_system(
             if let Some(input_to_process) = &client_info.input_to_process {
                 move_character(
                     input_to_process.compute_wish_dir(),
-                    &mut physics,
+                    &mut spatial_query,
                     &mut char_state,
                     &mut char_xform,
                     char_constants,

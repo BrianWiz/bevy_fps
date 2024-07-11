@@ -23,24 +23,24 @@ pub fn handle_received_messages_system(world: &mut World) {
             match message {
                 // we received a list of weapon configs, add them as assets
                 (_channel_id, ServerMessage::WeaponConfigList(weapon_config_list)) => {
-                    world.resource_scope(|world, asset_server: Mut<AssetServer>| {
-                        world.resource_scope(
-                            |_, mut weapon_config_assets: Mut<DataAssetHandles>| {
-                                // clear existing assets
-                                weapon_config_assets.weapon_configs.clear();
-                                // build up new assets
-                                for weapon_config in weapon_config_list.configs {
-                                    weapon_config_assets
-                                        .weapon_configs
-                                        .push(asset_server.add(weapon_config.clone()));
-                                    shared::bevy::log::info!(
-                                        "Received weapon config: {:?}",
-                                        weapon_config
-                                    );
-                                }
-                            },
-                        );
-                    });
+                    // world.resource_scope(|world, asset_server: Mut<AssetServer>| {
+                    //     world.resource_scope(
+                    //         |_, mut weapon_config_assets: Mut<DataAssetHandles>| {
+                    //             // clear existing assets
+                    //             weapon_config_assets.weapon_configs.clear();
+                    //             // build up new assets
+                    //             for weapon_config in weapon_config_list.configs {
+                    //                 weapon_config_assets
+                    //                     .weapon_configs
+                    //                     .push(asset_server.add(weapon_config.clone()));
+                    //                 shared::bevy::log::info!(
+                    //                     "Received weapon config: {:?}",
+                    //                     weapon_config
+                    //                 );
+                    //             }
+                    //         },
+                    //     );
+                    // });
                 }
 
                 // we received a snapshot of the game state
