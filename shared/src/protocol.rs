@@ -21,7 +21,7 @@ pub enum ClientMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServerMessage {
-    WeaponConfigList(WeaponConfigList),
+    WeaponConfig(WeaponConfig),
     TickSnapshot(TickSnapshot),
 }
 
@@ -53,11 +53,6 @@ pub struct TickSnapshot {
     pub tick: u32,
     pub acked_input_id: Option<u32>,
     pub characters: Vec<CharacterSnapshot>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct WeaponConfigList {
-    pub configs: Vec<WeaponConfig>,
 }
 
 #[repr(u8)]

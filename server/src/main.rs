@@ -49,7 +49,7 @@ fn main() {
                 net::handle_client_disconnected_system,
                 net::handle_client_input_system,
                 gamemode::handle_client_connected_system,
-                characters::move_system,
+                characters::consume_input_system,
                 characters::despawn_system,
                 net::snapshot_system,
                 net::data_load_system,
@@ -78,9 +78,12 @@ fn main() {
 fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut data_folder: ResMut<DataFolder>,
+    mut data_asset_handles: ResMut<DataAssetHandles>,
 ) {
-    *data_folder = DataFolder(asset_server.load_folder("data"));
+    data_asset_handles.weapon_configs.insert(
+        "rocket_launcher".into(),
+        asset_server.load::<WeaponConfig>("data/rocket_launcher.weapon.ron"),
+    );
 
     // floor
     commands.spawn((

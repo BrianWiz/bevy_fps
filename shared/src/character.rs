@@ -1,4 +1,4 @@
-use crate::protocol::CharacterSnapshot;
+use crate::{protocol::CharacterSnapshot, weapons::WeaponState};
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy_quinnet::shared::ClientId;
@@ -64,6 +64,11 @@ pub fn spawn_character(
                 move_drag: 5.9,
                 move_accel: 15.5,
                 move_speed: 5.0,
+            },
+            WeaponState {
+                weapon_config_tag: "rocket_launcher".to_string(),
+                next_fire_time: 0,
+                ammo: 100,
             },
             SpatialBundle {
                 transform: Transform::from_translation(position.clone()),

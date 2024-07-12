@@ -54,21 +54,18 @@ pub fn handle_client_connected_system(
             server_last_processed_input_id: None,
         });
 
-        let weapon_config_list = WeaponConfigList {
-            configs: weapon_configs_assets.iter().map(|a| a.1).cloned().collect(),
-        };
-
-        println!("{:?}", weapon_config_list);
-        if let Err(err) = server.endpoint_mut().send_message_on(
-            event.client_id,
-            ServerChannels::ImportantData,
-            ServerMessage::WeaponConfigList(weapon_config_list),
-        ) {
-            shared::bevy::log::error!(
-                "Failed to send weapon config data to client ({}): {}",
+        for weapon_config in weapon_configs_assets.iter() {
+            if let Err(err) = server.endpoint_mut().send_message_on(
                 event.client_id,
-                err
-            );
+                ServerChannels::ImportantData,
+                ServerMessage::WeaponConfig(weapon_config.1.clone()),
+            ) {
+                shared::bevy::log::error!(
+                    "Failed to send weapon config data to client ({}): {}",
+                    event.client_id,
+                    err
+                );
+            }
         }
 
         shared::bevy::log::info!("Client connected ({}): {}", event.client_id, event.username);
@@ -226,54 +223,21 @@ pub fn snapshot_system(
 }
 
 pub fn data_load_system(
-    folders: Res<Assets<LoadedFolder>>,
-    data_folder: Res<DataFolder>,
-    mut data_asset_handles: ResMut<DataAssetHandles>,
     weapon_config_assets: Res<Assets<WeaponConfig>>,
-    mut events: EventReader<AssetEvent<LoadedFolder>>,
+    mut events: EventReader<AssetEvent<WeaponConfig>>,
     mut server: ResMut<QuinnetServer>,
-    asset_server: Res<AssetServer>,
 ) {
-    // listens to load state of the data folder and gets the weapon configs
     for event in events.read() {
-        if let AssetEvent::LoadedWithDependencies { id: asset_id } = event {
-            // build up the weapon config list
-            let mut new_weapon_config_list = WeaponConfigList {
-                configs: Vec::new(),
-            };
-            let type_id = TypeId::of::<WeaponConfig>();
-            if &data_folder.0.id() == asset_id {
-                if let Some(loaded_folder) = folders.get(&data_folder.0) {
-                    for handle in &loaded_folder.handles {
-                        if handle.type_id() == type_id {
-                            let typed_handle: Handle<WeaponConfig> = handle.clone().typed();
-                            if let Some(weapon_config) = weapon_config_assets.get(&typed_handle) {
-                                new_weapon_config_list.configs.push(weapon_config.clone());
-                            }
-                        }
-                    }
-                }
-            }
-
-            if new_weapon_config_list.configs.len() > 0 {
-                // replace handles with new ones
-                data_asset_handles.weapon_configs.clear();
-                data_asset_handles.weapon_configs = weapon_config_assets
-                    .iter()
-                    .map(|a| asset_server.get_id_handle(a.0).unwrap_or_default())
-                    .collect();
-
-                // sends the configs to all clients
-                let clients = server.endpoint().clients();
+        if let AssetEvent::Added { id: asset_id } | AssetEvent::Modified { id: asset_id } = event {
+            if let Some(weapon_config) = weapon_config_assets.get(*asset_id) {
+                shared::bevy::log::info!("Loaded weapon config: {:?}", weapon_config);
+                let clients = server.endpoint_mut().clients();
                 if let Err(err) = server.endpoint_mut().send_group_message_on(
                     clients.iter(),
                     ServerChannels::ImportantData,
-                    ServerMessage::WeaponConfigList(new_weapon_config_list),
+                    ServerMessage::WeaponConfig(weapon_config.clone()),
                 ) {
-                    shared::bevy::log::error!(
-                        "Failed to send weapon config list to clients: {:?}",
-                        err
-                    );
+                    shared::bevy::log::error!("Failed to send weapon config data: {}", err);
                 }
             }
         }
