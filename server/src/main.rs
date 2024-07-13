@@ -144,4 +144,14 @@ fn setup(
         Collider::cylinder(0.5, 8.0),
         RigidBody::Static,
     ));
+
+    // small step
+    commands.spawn((
+        SpatialBundle {
+            transform: Transform::from_translation(Vec3::new(1.0, 0.05, 1.0)),
+            ..default()
+        },
+        Collider::cuboid(2.0, 0.2, 2.0),
+        RigidBody::Static,
+    ));
 }

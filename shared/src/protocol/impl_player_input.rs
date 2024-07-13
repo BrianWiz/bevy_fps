@@ -3,7 +3,8 @@ use bevy::prelude::*;
 
 impl PlayerInput {
     pub fn compute_wish_dir(&self) -> Vec3 {
-        let rotation = Quat::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0);
+        //let rotation = Quat::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0);
+        let rotation = Quat::from_rotation_y(self.yaw);
         let mut wish_dir = Vec3::ZERO;
 
         if self.move_forward {

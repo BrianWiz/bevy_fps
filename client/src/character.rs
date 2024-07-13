@@ -34,7 +34,10 @@ fn spawn_character_visuals(
     let mut cmd = commands.spawn((
         CharacterVisuals { belongs_to },
         PbrBundle {
-            mesh: meshes.add(Mesh::from(Sphere { radius: 0.5 })),
+            mesh: meshes.add(Mesh::from(Cylinder {
+                radius: 0.5,
+                half_height: 0.5,
+            })),
             material: materials.add(Color::srgb(0.5, 0.5, 1.0)),
             transform: Transform::from_translation(position.clone()),
             ..default()

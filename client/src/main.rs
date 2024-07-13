@@ -173,6 +173,20 @@ fn setup_system(
         RigidBody::Static,
     ));
 
+    // small step
+    commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(Mesh::from(Cuboid {
+                half_size: Vec3::new(1.0, 0.1, 1.0),
+            })),
+            material: materials.add(Color::srgb(0.5, 0.5, 0.5)),
+            transform: Transform::from_translation(Vec3::new(1.0, 0.05, 1.0)),
+            ..default()
+        },
+        Collider::cuboid(2.0, 0.2, 2.0),
+        RigidBody::Static,
+    ));
+
     // light
     commands.spawn(PointLightBundle {
         transform: Transform::from_translation(Vec3::new(4.0, 8.0, 4.0)),

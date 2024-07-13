@@ -3,7 +3,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy_quinnet::shared::ClientId;
 
-const GRAVITY: f32 = 3.71; // mars gravity
+const GRAVITY: f32 = 9.81;
 
 #[derive(Event)]
 pub struct CharacterDespawnEvent {
@@ -15,6 +15,7 @@ pub struct CharacterConstants {
     pub move_drag: f32,
     pub move_accel: f32,
     pub move_speed: f32,
+    pub max_ground_distance: f32,
 }
 
 #[derive(Component)]
@@ -22,6 +23,7 @@ pub struct CharacterState {
     pub owner_client_id: ClientId,
     pub velocity: Vec3,
     pub visuals_offset: Vec3,
+    pub is_grounded: bool,
 }
 
 impl CharacterState {
@@ -59,11 +61,13 @@ pub fn spawn_character(
                 owner_client_id: owner_peer_id,
                 velocity: Vec3::ZERO,
                 visuals_offset: Vec3::ZERO,
+                is_grounded: false,
             },
             CharacterConstants {
                 move_drag: 5.9,
                 move_accel: 15.5,
                 move_speed: 5.0,
+                max_ground_distance: 0.1,
             },
             WeaponState {
                 weapon_config_tag: "rocket_launcher".to_string(),
@@ -87,14 +91,12 @@ pub fn move_character(
     delta_seconds: f32,
 ) {
     let mut velocity = state.velocity;
+    let radius = 0.5;
+    let height = 1.0;
+    let collider = Collider::cylinder(radius, height);
+    let epsilon = 0.0001;
 
-    // drag
-    velocity *= 1.0 - constants.move_drag * delta_seconds;
-
-    // gravity
-    velocity.y -= GRAVITY * delta_seconds;
-
-    // acceleration
+    // Apply acceleration
     velocity += accelerate(
         wish_dir,
         constants.move_speed,
@@ -103,50 +105,101 @@ pub fn move_character(
         delta_seconds,
     );
 
-    let mut remaining_distance = velocity.length() * delta_seconds;
-    let radius = 0.5;
-    let epsilon = 0.001;
-    let collider = Collider::sphere(radius);
-    let ignore_origin_penetration = true;
+    if state.is_grounded {
+        velocity *= 1.0 - constants.move_drag * delta_seconds;
+    } else {
+        velocity.y -= GRAVITY * delta_seconds;
+    }
 
-    // we loop 4 times because we may move then collide, then slide, then collide again
-    for _ in 0..4 {
-        if remaining_distance < epsilon || velocity.length_squared() < epsilon * epsilon {
+    let mut remaining_time = delta_seconds;
+    let max_iterations = 4;
+
+    for _ in 0..max_iterations {
+        if remaining_time < epsilon || velocity.length_squared() < epsilon * epsilon {
             break;
         }
 
-        let velocity_dir = velocity.normalize_or_zero();
+        let move_delta = velocity * remaining_time;
 
-        if let Some(first_hit) = spatial_query.cast_shape(
+        if let Some(hit) = spatial_query.cast_shape(
             &collider,
             transform.translation,
             transform.rotation,
-            Dir3::new(velocity_dir).unwrap_or(Dir3::Z),
-            remaining_distance,
-            ignore_origin_penetration,
+            Dir3::new(move_delta.normalize_or_zero()).unwrap_or(Dir3::Z),
+            move_delta.length(),
+            true,
             SpatialQueryFilter::default(),
         ) {
-            // move to the point of impact
-            let move_distance = (first_hit.time_of_impact - epsilon).max(0.0);
-            transform.translation += velocity_dir * move_distance;
+            let normal = hit.normal1;
+            let distance_before_hit = hit.time_of_impact * move_delta.length();
+            let time_before_hit = hit.time_of_impact * remaining_time;
 
-            // slide along the surface next move
-            let normal = first_hit.normal1;
-            velocity = velocity - normal * velocity.dot(normal);
+            // Move to just before the collision point
+            transform.translation += move_delta.normalize() * distance_before_hit;
 
-            // prevents sticking
+            // Blend reflection and velocity to create a slight bounce effect, reducing the "stickiness" of walls
+            let reflection = velocity - 2.0 * velocity.dot(normal) * normal;
+            let slide_factor = 1.0; // Adjust this value to control slidiness
+            velocity = velocity.lerp(reflection, slide_factor);
+
+            // Project velocity onto the plane of the wall
+            velocity -= normal * velocity.dot(normal).max(0.0);
+
+            // Prevent sticking to walls
             transform.translation += normal * epsilon;
 
-            // update remaining distance
-            remaining_distance -= move_distance;
+            remaining_time -= time_before_hit;
         } else {
-            // no collision, move the full remaining distance
-            transform.translation += velocity_dir * remaining_distance;
+            // No collision, move the full distance
+            transform.translation += move_delta;
             break;
         }
     }
 
+    let ground_info = ground_check(
+        spatial_query,
+        transform,
+        &collider,
+        constants.max_ground_distance,
+    );
+
+    if ground_info.is_some() {
+        state.is_grounded = true;
+    } else {
+        state.is_grounded = false;
+    }
+
     state.velocity = velocity;
+}
+
+fn ground_check(
+    spatial_query: &SpatialQuery,
+    transform: &Transform,
+    collider: &Collider,
+    max_ground_distance: f32,
+) -> Option<GroundInfo> {
+    let down_ray = -transform.up();
+    if let Some(hit) = spatial_query.cast_shape(
+        collider,
+        transform.translation,
+        transform.rotation,
+        down_ray,
+        max_ground_distance,
+        true,
+        SpatialQueryFilter::default(),
+    ) {
+        Some(GroundInfo {
+            normal: hit.normal1,
+            distance: hit.time_of_impact,
+        })
+    } else {
+        None
+    }
+}
+
+struct GroundInfo {
+    normal: Vec3,
+    distance: f32,
 }
 
 fn accelerate(
