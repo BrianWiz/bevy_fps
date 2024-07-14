@@ -32,8 +32,8 @@ pub struct WeaponConfig {
 }
 
 pub fn get_weapon_config<'a>(
-    data_asset_handles: &Res<DataAssetHandles>,
-    weapon_configs: &'a Res<Assets<WeaponConfig>>,
+    data_asset_handles: &DataAssetHandles,
+    weapon_configs: &'a Assets<WeaponConfig>,
     tag: &str,
 ) -> Option<&'a WeaponConfig> {
     let handle = data_asset_handles.weapon_configs.get(tag)?;

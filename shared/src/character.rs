@@ -1,5 +1,5 @@
 use crate::{protocol::CharacterSnapshot, weapons::WeaponState};
-use avian3d::prelude::*;
+use avian3d::{math::Quaternion, prelude::*};
 use bevy::prelude::*;
 use bevy_quinnet::shared::ClientId;
 
@@ -24,7 +24,6 @@ pub struct CharacterConstants {
 pub struct CharacterState {
     pub owner_client_id: ClientId,
     pub velocity: Vec3,
-    pub visuals_offset: Vec3,
     pub is_grounded: bool,
 }
 
@@ -38,11 +37,11 @@ impl CharacterState {
         snapshot: &CharacterSnapshot,
         existing_transform: &mut Transform,
     ) {
-        if let Some(velocity) = snapshot.velocity {
-            self.velocity = velocity;
+        if let Some(server_velocity) = snapshot.velocity {
+            self.velocity = server_velocity;
         }
-        if let Some(position) = snapshot.position {
-            existing_transform.translation = position;
+        if let Some(server_position) = snapshot.position {
+            existing_transform.translation = server_position;
         }
     }
 }
@@ -62,7 +61,6 @@ pub fn spawn_character(
             CharacterState {
                 owner_client_id: owner_peer_id,
                 velocity: Vec3::ZERO,
-                visuals_offset: Vec3::ZERO,
                 is_grounded: false,
             },
             CharacterConstants {
@@ -95,48 +93,42 @@ pub fn move_character(
     delta_seconds: f32,
 ) {
     let mut velocity = state.velocity;
+
+    // accelerate
+    velocity += accelerate(
+        wish_dir,
+        constants.move_speed,
+        velocity.length(),
+        constants.move_accel,
+        delta_seconds,
+    );
+
+    // apply gravity
+    if !state.is_grounded {
+        velocity.y -= GRAVITY * delta_seconds;
+    }
+
+    let mut remaining_motion = velocity * delta_seconds;
     let radius = 0.5;
     let height = 1.0;
     let collider = Collider::cylinder(radius, height);
     let epsilon = 0.001;
 
-    // Apply acceleration
-    velocity += accelerate(
-        wish_dir,
-        constants.move_speed,
-        velocity.dot(wish_dir),
-        constants.move_accel,
-        delta_seconds,
-    );
-
-    if state.is_grounded {
-        velocity *= 1.0 - constants.move_drag * delta_seconds;
-    } else {
-        velocity.y -= GRAVITY * delta_seconds;
-    }
-
-    let mut remaining_time = delta_seconds;
-    let max_iterations = 4;
-
-    for _ in 0..max_iterations {
-        if remaining_time < epsilon || velocity.length_squared() < epsilon * epsilon {
-            break;
-        }
-
-        let move_delta = velocity * remaining_time;
-
+    for _ in 0..4 {
         if let Some(hit) = spatial_query.cast_shape(
             &collider,
             transform.translation,
-            transform.rotation,
-            Dir3::new(move_delta.normalize_or_zero()).unwrap_or(Dir3::Z),
-            move_delta.length(),
+            Quaternion::IDENTITY,
+            Dir3::new(remaining_motion.normalize()).unwrap_or(Dir3::Z),
+            remaining_motion.length(),
             true,
             SpatialQueryFilter::default(),
         ) {
             let normal = hit.normal1;
-            let distance_before_hit = hit.time_of_impact * move_delta.length();
-            let time_before_hit = hit.time_of_impact * remaining_time;
+
+            // Move to just before the collision point
+            let move_distance = hit.time_of_impact;
+            transform.translation += remaining_motion.normalize() * move_distance;
 
             // Check if we can step up
             if normal.y < constants.max_step_angle_degrees.to_radians().cos() {
@@ -148,9 +140,9 @@ pub fn move_character(
                     .cast_shape(
                         &collider,
                         step_up_position,
-                        transform.rotation,
-                        Dir3::new(move_delta.normalize_or_zero()).unwrap_or(Dir3::Z),
-                        move_delta.length(),
+                        Quaternion::IDENTITY,
+                        Dir3::new(remaining_motion.normalize_or_zero()).unwrap_or(Dir3::Z),
+                        remaining_motion.length(),
                         true,
                         SpatialQueryFilter::default(),
                     )
@@ -159,8 +151,8 @@ pub fn move_character(
                     // Cast down to find the actual step height
                     if let Some(down_hit) = spatial_query.cast_shape(
                         &collider,
-                        step_up_position + move_delta,
-                        transform.rotation,
+                        step_up_position + remaining_motion,
+                        Quaternion::IDENTITY,
                         Dir3::NEG_Y,
                         step_height + epsilon,
                         true,
@@ -172,40 +164,50 @@ pub fn move_character(
                         if step_height <= constants.max_step_height {
                             // Step up
                             transform.translation +=
-                                move_delta + (Vec3::Y * (step_height + epsilon));
+                                remaining_motion + (Vec3::Y * (step_height + epsilon));
+                            remaining_motion =
+                                remaining_motion - normal * remaining_motion.dot(normal);
                             velocity = slide_velocity(velocity, normal);
-                            remaining_time -= time_before_hit;
                             continue;
                         }
                     }
                 }
             }
 
-            velocity = slide_velocity(velocity, normal);
-
-            // Move to just before the collision point
-            transform.translation += move_delta.normalize() * distance_before_hit;
-
-            // Prevent sticking to walls
+            // prevent sticking
             transform.translation += normal * epsilon;
 
-            remaining_time -= time_before_hit;
+            // deflect velocity along the surface
+            remaining_motion = remaining_motion - normal * remaining_motion.dot(normal);
+            velocity = slide_velocity(velocity, normal);
         } else {
-            // No collision, move the full distance
-            transform.translation += move_delta;
+            // No collision, move the full remaining distance
+            transform.translation += remaining_motion;
             break;
         }
     }
 
-    let ground_info = ground_check(
-        spatial_query,
-        transform,
-        &collider,
-        constants.max_ground_distance,
-    );
+    if let Some(ground_info) = ground_check(spatial_query, transform, constants) {
+        let ground_angle = ground_info.normal.y.acos().to_degrees();
+        if ground_angle < constants.max_step_angle_degrees {
+            state.is_grounded = true;
 
-    if ground_info.is_some() {
-        state.is_grounded = true;
+            // horizontal drag
+            velocity.x = decelerate_component(
+                velocity.x,
+                velocity.length(),
+                constants.move_drag,
+                delta_seconds,
+            );
+
+            // horizontal drag
+            velocity.z = decelerate_component(
+                velocity.z,
+                velocity.length(),
+                constants.move_drag,
+                delta_seconds,
+            );
+        }
     } else {
         state.is_grounded = false;
     }
@@ -213,51 +215,37 @@ pub fn move_character(
     state.velocity = velocity;
 }
 
-fn slide_velocity(mut velocity: Vec3, normal: Vec3) -> Vec3 {
-    // Blend reflection and velocity to create a slight bounce effect, reducing the "stickiness" of walls
-    let reflection = velocity - 2.0 * velocity.dot(normal) * normal;
-    let slide_factor = 0.75; // Adjust this value to control slidiness
-    velocity = velocity.lerp(reflection, slide_factor);
-
-    // Project velocity onto the plane of the wall
-    velocity -= normal * velocity.dot(normal).max(0.0);
-    velocity
+fn slide_velocity(velocity: Vec3, normal: Vec3) -> Vec3 {
+    velocity - normal * velocity.dot(normal)
 }
 
 fn ground_check(
     spatial_query: &SpatialQuery,
     transform: &Transform,
-    collider: &Collider,
-    max_ground_distance: f32,
+    constants: &CharacterConstants,
 ) -> Option<GroundInfo> {
-    let down_ray = -transform.up();
+    let height = 1.0;
+    let collider = Collider::cylinder(0.5, constants.max_ground_distance);
+    let bottom_position = transform.translation - Vec3::Y * (height / 2.0);
+
     if let Some(hit) = spatial_query.cast_shape(
-        collider,
-        transform.translation,
-        transform.rotation,
-        down_ray,
-        max_ground_distance,
+        &collider,
+        bottom_position,
+        Quaternion::IDENTITY,
+        Dir3::new(Vec3::NEG_Y).unwrap_or(Dir3::Z),
+        constants.max_ground_distance,
         true,
         SpatialQueryFilter::default(),
     ) {
-        if !is_wall_normal(hit.normal1) {
-            return Some(GroundInfo {
-                normal: hit.normal1,
-                distance: hit.time_of_impact * max_ground_distance,
-            });
-        }
+        return Some(GroundInfo {
+            normal: hit.normal1,
+        });
     }
-
     None
 }
 
 struct GroundInfo {
     normal: Vec3,
-    distance: f32,
-}
-
-fn is_wall_normal(normal: Vec3) -> bool {
-    normal.y.abs() < 0.1
 }
 
 fn accelerate(
@@ -279,4 +267,22 @@ fn accelerate(
     }
 
     wish_direction * accel_speed
+}
+
+fn decelerate_component(component: f32, current_speed: f32, drag: f32, delta_seconds: f32) -> f32 {
+    let mut new_speed;
+    let mut drop = 0.0;
+
+    drop += current_speed * drag * delta_seconds;
+
+    new_speed = current_speed - drop;
+    if new_speed < 0.0 {
+        new_speed = 0.0;
+    }
+
+    if new_speed != 0.0 {
+        new_speed /= current_speed;
+    }
+
+    component * new_speed
 }

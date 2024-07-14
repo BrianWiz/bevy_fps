@@ -33,7 +33,6 @@ fn main() {
             (
                 input::update_rotation_system,
                 character::update_locally_controlled_visuals_system,
-                character::update_visuals_system,
                 character::update_camera_system,
             )
                 .chain(),

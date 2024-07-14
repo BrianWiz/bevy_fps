@@ -10,7 +10,7 @@ pub fn consume_input_system(
     fixed_time: Res<Time<Fixed>>,
     data_asset_handles: Res<DataAssetHandles>,
     weapon_configs: Res<Assets<WeaponConfig>>,
-    mut spatial_query: SpatialQuery,
+    spatial_query: SpatialQuery,
     mut game_server: ResMut<Application>,
     mut characters: Query<(
         &mut CharacterState,
@@ -26,30 +26,44 @@ pub fn consume_input_system(
             .iter_mut()
             .find(|c| c.client_id == char_state.owner_client_id)
         {
-            if let Some(input_to_process) = &client_info.input_to_process {
+            if client_info.inputs_to_process.is_empty() {
                 move_character(
-                    input_to_process.compute_wish_dir(),
-                    &mut spatial_query,
+                    client_info.last_processed_input.compute_wish_dir(),
+                    &spatial_query,
                     &mut char_state,
                     &mut char_xform,
                     char_constants,
                     fixed_time.delta_seconds(),
                 );
-
-                if input_to_process.fire && weapon_state.can_fire(&fixed_time) {
-                    let weapon_config = get_weapon_config(
-                        &data_asset_handles,
-                        &weapon_configs,
-                        &weapon_state.weapon_config_tag,
+            } else {
+                let chopped_delta =
+                    fixed_time.delta_seconds() / client_info.inputs_to_process.len() as f32;
+                for input in client_info.inputs_to_process.iter() {
+                    move_character(
+                        input.compute_wish_dir(),
+                        &spatial_query,
+                        &mut char_state,
+                        &mut char_xform,
+                        char_constants,
+                        chopped_delta,
                     );
 
-                    if let Some(weapon_config) = weapon_config {
-                        weapon_state.on_fire(&fixed_time, weapon_config);
-                        println!("Firing weapon!");
-                    }
-                }
+                    if input.fire && weapon_state.can_fire(&fixed_time) {
+                        let weapon_config = get_weapon_config(
+                            &data_asset_handles,
+                            &weapon_configs,
+                            &weapon_state.weapon_config_tag,
+                        );
 
-                client_info.server_last_processed_input_id = Some(input_to_process.id);
+                        if let Some(weapon_config) = weapon_config {
+                            weapon_state.on_fire(&fixed_time, weapon_config);
+                            println!("Firing weapon!");
+                        }
+                    }
+                    client_info.last_processed_input = input.clone();
+                    client_info.server_last_processed_input_id = Some(input.id);
+                }
+                client_info.inputs_to_process.clear();
             }
         }
     }

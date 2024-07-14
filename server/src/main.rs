@@ -144,7 +144,7 @@ fn setup(
         Collider::cylinder(0.5, 8.0),
         RigidBody::Static,
     ));
-    // small staircase
+
     let num_steps = 20; // Number of steps in the staircase
     let step_width = 2.0;
     let step_height = 0.1;

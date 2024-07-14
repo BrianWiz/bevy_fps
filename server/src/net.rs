@@ -31,7 +31,8 @@ impl Default for Application {
 
 pub struct ClientInfo {
     pub client_id: ClientId,
-    pub input_to_process: Option<PlayerInput>,
+    pub inputs_to_process: Vec<PlayerInput>,
+    pub last_processed_input: PlayerInput,
     pub client_last_acked_tick: Option<u32>,
     pub server_last_processed_input_id: Option<u32>,
 }
@@ -45,7 +46,8 @@ pub fn handle_client_connected_system(
     for event in events.read() {
         app.clients.push(ClientInfo {
             client_id: event.client_id,
-            input_to_process: None,
+            inputs_to_process: Vec::new(),
+            last_processed_input: PlayerInput::default(),
             client_last_acked_tick: None,
             server_last_processed_input_id: None,
         });
@@ -78,7 +80,30 @@ pub fn handle_client_input_system(
             .iter_mut()
             .find(|c| c.client_id == event.client_id)
         {
-            client_info.input_to_process = Some(event.input.clone());
+            if client_info.last_processed_input.id >= event.input.id {
+                shared::bevy::log::warn!(
+                    "Received out-of-order input from client ({}): {}",
+                    event.client_id,
+                    event.input.id
+                );
+                continue;
+            }
+
+            if client_info
+                .inputs_to_process
+                .iter()
+                .find(|i| i.id == event.input.id)
+                .is_some()
+            {
+                shared::bevy::log::warn!(
+                    "Received duplicate input from client ({}): {}",
+                    event.client_id,
+                    event.input.id
+                );
+                continue;
+            }
+
+            client_info.inputs_to_process.push(event.input.clone());
             client_info.client_last_acked_tick = event.input.server_tick;
         }
     }

@@ -25,7 +25,7 @@ pub enum ServerMessage {
     TickSnapshot(TickSnapshot),
 }
 
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+#[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq)]
 pub struct PlayerInput {
     pub id: u32,
     pub server_tick: Option<u32>,

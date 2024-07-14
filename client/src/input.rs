@@ -24,28 +24,33 @@ impl PlayerInputController {
     pub fn get_input(&self, input_id: u32) -> Option<&PlayerInput> {
         self.input_history.iter().find(|input| input.id == input_id)
     }
+
+    pub fn retain_inputs_after(&mut self, input_id: u32) {
+        self.input_history.retain(|input| input.id > input_id);
+    }
 }
 
 pub fn update_rotation_system(
     mut mouse_motion: EventReader<MouseMotion>,
-    mut character_transform: Query<&mut Transform, (With<LocallyControlled>, With<CharacterState>)>,
+    mut visuals: Query<&mut Transform, (With<LocallyControlled>, With<CharacterVisuals>)>,
     mut controller: ResMut<PlayerInputController>,
 ) {
-    if let Ok(mut character_transform) = character_transform.get_single_mut() {
+    if let Ok(mut xform) = visuals.get_single_mut() {
         for event in mouse_motion.read() {
             // Extract current yaw and pitch
-            let (yaw, pitch, _) = character_transform.rotation.to_euler(EulerRot::YXZ);
+            let (mut yaw, mut pitch, _) = xform.rotation.to_euler(EulerRot::YXZ);
 
             // Apply new rotations
-            let new_yaw = yaw - event.delta.x.to_radians() * crate::MOUSE_SENISITIVITY;
-            let new_pitch = (pitch - event.delta.y.to_radians() * crate::MOUSE_SENISITIVITY)
+            yaw -= event.delta.x.to_radians() * crate::MOUSE_SENISITIVITY;
+            pitch = (pitch - event.delta.y.to_radians() * crate::MOUSE_SENISITIVITY)
                 .clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
 
             // Reconstruct rotation with locked roll
-            character_transform.rotation = Quat::from_euler(EulerRot::YXZ, new_yaw, new_pitch, 0.0);
+            xform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
 
-            controller.latest_input.yaw = new_yaw;
-            controller.latest_input.pitch = new_pitch;
+            // Update controller input
+            controller.latest_input.yaw = yaw;
+            controller.latest_input.pitch = pitch;
         }
     }
 }
@@ -72,7 +77,5 @@ pub fn update_history_system(mut controller: ResMut<PlayerInputController>) {
 
     // retain only the last 2 seconds of input history
     let oldest_input_id = controller.next_input_id.saturating_sub(crate::TICKRATE * 2);
-    controller
-        .input_history
-        .retain(|input| input.id >= oldest_input_id);
+    controller.retain_inputs_after(oldest_input_id);
 }

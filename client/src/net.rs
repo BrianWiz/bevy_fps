@@ -2,6 +2,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use crate::character::{self, spawn_character};
+use crate::components::{ClientCorrection, LocallyControlled};
 use crate::input::PlayerInputController;
 use shared::bevy::ecs::system::RunSystemOnce;
 use shared::bevy::prelude::*;
@@ -36,86 +37,93 @@ pub fn handle_received_messages_system(world: &mut World) {
 
                 // we received a snapshot of the game state
                 (_channel_id, ServerMessage::TickSnapshot(snapshot)) => {
+                    let mut already_played = false;
+                    world.resource_scope(|_, input_controller: Mut<PlayerInputController>| {
+                        if let Some(last_server_tick) = input_controller.latest_input.server_tick {
+                            if last_server_tick >= snapshot.tick {
+                                already_played = true;
+                            }
+                        }
+                    });
+
+                    if already_played {
+                        continue;
+                    }
+
                     // query for existing characters
                     for char_snap in &snapshot.characters {
-                        // lc_ = locally controlled
                         let mut should_spawn_new = true;
-                        let mut locally_controlled = false;
-                        let mut lc_position_before = Vec3::ZERO;
-                        let mut lc_entity = None;
 
-                        if let Some((entity, mut existing_char_state, mut existing_char_xform)) =
-                            world
-                                .query::<(Entity, &mut CharacterState, &mut Transform)>()
-                                .iter_mut(world)
-                                .find(|(_, char, _)| {
-                                    char.owner_client_id == char_snap.owner_client_id
-                                })
-                        {
-                            should_spawn_new = false;
+                        // owned character
+                        if client_id == char_snap.owner_client_id {
+                            let mut offset = Vec3::ZERO;
 
-                            if existing_char_state.is_locally_controlled(client_id) {
-                                locally_controlled = true;
-                                lc_position_before = existing_char_xform.translation.clone();
-                                lc_entity = Some(entity);
-                            }
+                            let original_yaw = if let Some(input_controller) = world.get_resource::<PlayerInputController>() {
+                                input_controller.latest_input.yaw
+                            } else {
+                                0.0
+                            };
 
-                            existing_char_state
-                                .apply_snapshot(&char_snap, &mut existing_char_xform);
-                        }
+                            // apply the snapshot
+                            if let Ok((mut char_state, mut transform)) =
+                                world
+                                    .query_filtered::<(
+                                        &mut CharacterState,
+                                        &mut Transform,
+                                    ), With<LocallyControlled>>(
+                                    )
+                                    .get_single_mut(world)
+                            {
+                                should_spawn_new = false;
+                                
+                                char_state.apply_snapshot(&char_snap, &mut transform);
+                                offset = transform.translation - char_snap.position.unwrap_or(Vec3::ZERO);
 
-                        if locally_controlled {
-                            if char_snap.position.is_none() {
-                                continue;
-                            }
+                                if char_snap.position.is_some() {
+                                    // we are the owner of this character
+                                    // so we need to replay inputs since the last acked input the server has provided us
+                                    if let Some(acked_input_id) = snapshot.acked_input_id {
+                                        let inputs_to_replay = if let Some(input_controller) =
+                                            world.get_resource::<PlayerInputController>()
+                                        {
+                                            input_controller.inputs_after(acked_input_id)
+                                        } else {
+                                            Vec::new()
+                                        };
 
-                            // we are the owner of this character
-                            // so we need to replay inputs since the last acked input the server has provided us
-                            if let Some(acked_input_id) = snapshot.acked_input_id {
-                                let acked_input = if let Some(input_controller) =
-                                    world.get_resource::<PlayerInputController>()
-                                {
-                                    input_controller.get_input(acked_input_id)
-                                } else {
-                                    None
-                                };
-
-                                if let Some(acked_input) = acked_input {
-                                    println!(
-                                        "Diff: {:?}",
-                                        acked_input
-                                            .final_position
-                                            .distance(char_snap.position.unwrap())
-                                    );
-                                }
-
-                                let inputs_to_replay = if let Some(input_controller) =
-                                    world.get_resource::<PlayerInputController>()
-                                {
-                                    input_controller.inputs_after(acked_input_id)
-                                } else {
-                                    Vec::new()
-                                };
-
-                                for input in inputs_to_replay {
-                                    if let Some(mut input_controller) =
-                                        world.get_resource_mut::<PlayerInputController>()
-                                    {
-                                        input_controller.latest_input = input;
-                                        world.run_system_once(character::move_system);
+                                        for input in inputs_to_replay {
+                                            if let Some(mut input_controller) =
+                                                world.get_resource_mut::<PlayerInputController>()
+                                            {
+                                                input_controller.latest_input = input;
+                                                world.run_system_once(character::move_system);
+                                            }
+                                        }
                                     }
                                 }
                             }
 
-                            if let Some(entity) = lc_entity {
-                                if let Ok((mut char_state, xform)) = world
-                                    .query::<(&mut CharacterState, &Transform)>()
-                                    .get_mut(world, entity)
-                                {
-                                    let lc_position_after = xform.translation.clone();
-                                    let diff = lc_position_after - lc_position_before;
-                                    char_state.visuals_offset = diff;
-                                }
+                            if let Some(mut input_controller) = world.get_resource_mut::<PlayerInputController>() {
+                                input_controller.latest_input.yaw = original_yaw;
+                            }
+
+                            if let Ok(mut correction) =
+                                world
+                                    .query_filtered::<&mut ClientCorrection, (With<CharacterState>, With<LocallyControlled>)>()
+                                    .get_single_mut(world)
+                            {
+                                correction.offset += offset;
+                            }
+                        }
+                        // non-owned character
+                        else {
+                            if let Some((mut char_state, mut xform)) = world
+                                .query::<(&mut CharacterState, &mut Transform)>()
+                                .iter_mut(world)
+                                .find(|(char, _)| char.owner_client_id == char_snap.owner_client_id)
+                            {
+                                char_state.apply_snapshot(&char_snap, &mut xform);
+                                should_spawn_new = false;
                             }
                         }
 
