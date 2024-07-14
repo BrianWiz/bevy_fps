@@ -173,19 +173,30 @@ fn setup_system(
         RigidBody::Static,
     ));
 
-    // small step
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Mesh::from(Cuboid {
-                half_size: Vec3::new(1.0, 0.1, 1.0),
-            })),
-            material: materials.add(Color::srgb(0.5, 0.5, 0.5)),
-            transform: Transform::from_translation(Vec3::new(1.0, 0.05, 1.0)),
-            ..default()
-        },
-        Collider::cuboid(2.0, 0.2, 2.0),
-        RigidBody::Static,
-    ));
+    // small staircase
+    let num_steps = 20; // Number of steps in the staircase
+    let step_width = 2.0;
+    let step_height = 0.1;
+    let step_depth = 0.5;
+
+    for i in 0..num_steps {
+        let x = 0.0;
+        let y = i as f32 * step_height;
+        let z = i as f32 * step_depth;
+
+        commands.spawn((
+            PbrBundle {
+                mesh: meshes.add(Mesh::from(Cuboid {
+                    half_size: Vec3::new(step_width / 2.0, step_height / 2.0, step_depth / 2.0),
+                })),
+                material: materials.add(Color::srgb(0.5, 0.5, 0.5)),
+                transform: Transform::from_translation(Vec3::new(x, y, z)),
+                ..default()
+            },
+            Collider::cuboid(step_width, step_height, step_depth),
+            RigidBody::Static,
+        ));
+    }
 
     // light
     commands.spawn(PointLightBundle {

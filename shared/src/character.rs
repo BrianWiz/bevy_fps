@@ -16,6 +16,8 @@ pub struct CharacterConstants {
     pub move_accel: f32,
     pub move_speed: f32,
     pub max_ground_distance: f32,
+    pub max_step_height: f32,
+    pub max_step_angle_degrees: f32,
 }
 
 #[derive(Component)]
@@ -64,10 +66,12 @@ pub fn spawn_character(
                 is_grounded: false,
             },
             CharacterConstants {
-                move_drag: 5.9,
-                move_accel: 15.5,
-                move_speed: 5.0,
+                move_drag: 10.0,
+                move_accel: 20.5,
+                move_speed: 4.0,
+                max_step_height: 0.3,
                 max_ground_distance: 0.1,
+                max_step_angle_degrees: 45.0,
             },
             WeaponState {
                 weapon_config_tag: "rocket_launcher".to_string(),
@@ -94,7 +98,7 @@ pub fn move_character(
     let radius = 0.5;
     let height = 1.0;
     let collider = Collider::cylinder(radius, height);
-    let epsilon = 0.0001;
+    let epsilon = 0.001;
 
     // Apply acceleration
     velocity += accelerate(
@@ -134,16 +138,53 @@ pub fn move_character(
             let distance_before_hit = hit.time_of_impact * move_delta.length();
             let time_before_hit = hit.time_of_impact * remaining_time;
 
+            // Check if we can step up
+            if normal.y < constants.max_step_angle_degrees.to_radians().cos() {
+                let step_height = constants.max_step_height;
+                let step_up_position = transform.translation + Vec3::Y * step_height;
+
+                // Check if there's space at the stepped-up position
+                if spatial_query
+                    .cast_shape(
+                        &collider,
+                        step_up_position,
+                        transform.rotation,
+                        Dir3::new(move_delta.normalize_or_zero()).unwrap_or(Dir3::Z),
+                        move_delta.length(),
+                        true,
+                        SpatialQueryFilter::default(),
+                    )
+                    .is_none()
+                {
+                    // Cast down to find the actual step height
+                    if let Some(down_hit) = spatial_query.cast_shape(
+                        &collider,
+                        step_up_position + move_delta,
+                        transform.rotation,
+                        Dir3::NEG_Y,
+                        step_height + epsilon,
+                        true,
+                        SpatialQueryFilter::default(),
+                    ) {
+                        let step_height =
+                            down_hit.point1.y - (transform.translation.y - height / 2.0);
+
+                        if step_height <= constants.max_step_height {
+                            // Step up
+                            transform.translation +=
+                                move_delta + (Vec3::Y * (step_height + epsilon));
+                            velocity = slide_velocity(velocity, normal);
+                            remaining_time -= time_before_hit;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            velocity = slide_velocity(velocity, normal);
+
             // Move to just before the collision point
             transform.translation += move_delta.normalize() * distance_before_hit;
-
-            // Blend reflection and velocity to create a slight bounce effect, reducing the "stickiness" of walls
-            let reflection = velocity - 2.0 * velocity.dot(normal) * normal;
-            let slide_factor = 1.0; // Adjust this value to control slidiness
-            velocity = velocity.lerp(reflection, slide_factor);
-
-            // Project velocity onto the plane of the wall
-            velocity -= normal * velocity.dot(normal).max(0.0);
 
             // Prevent sticking to walls
             transform.translation += normal * epsilon;
@@ -172,6 +213,17 @@ pub fn move_character(
     state.velocity = velocity;
 }
 
+fn slide_velocity(mut velocity: Vec3, normal: Vec3) -> Vec3 {
+    // Blend reflection and velocity to create a slight bounce effect, reducing the "stickiness" of walls
+    let reflection = velocity - 2.0 * velocity.dot(normal) * normal;
+    let slide_factor = 0.75; // Adjust this value to control slidiness
+    velocity = velocity.lerp(reflection, slide_factor);
+
+    // Project velocity onto the plane of the wall
+    velocity -= normal * velocity.dot(normal).max(0.0);
+    velocity
+}
+
 fn ground_check(
     spatial_query: &SpatialQuery,
     transform: &Transform,
@@ -188,18 +240,24 @@ fn ground_check(
         true,
         SpatialQueryFilter::default(),
     ) {
-        Some(GroundInfo {
-            normal: hit.normal1,
-            distance: hit.time_of_impact,
-        })
-    } else {
-        None
+        if !is_wall_normal(hit.normal1) {
+            return Some(GroundInfo {
+                normal: hit.normal1,
+                distance: hit.time_of_impact * max_ground_distance,
+            });
+        }
     }
+
+    None
 }
 
 struct GroundInfo {
     normal: Vec3,
     distance: f32,
+}
+
+fn is_wall_normal(normal: Vec3) -> bool {
+    normal.y.abs() < 0.1
 }
 
 fn accelerate(

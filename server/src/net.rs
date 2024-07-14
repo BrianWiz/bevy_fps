@@ -1,4 +1,3 @@
-use shared::bevy::asset::LoadedFolder;
 use shared::bevy::prelude::*;
 use shared::bevy_quinnet::server::certificate::CertificateRetrievalMode;
 use shared::bevy_quinnet::server::ConnectionLostEvent;
@@ -7,14 +6,11 @@ use shared::bevy_quinnet::server::ServerEndpointConfiguration;
 use shared::bevy_quinnet::shared::ClientId;
 use shared::character::*;
 use shared::protocol::*;
-use shared::resources::DataAssetHandles;
 use shared::weapons::WeaponConfig;
-use std::any::TypeId;
 
 use crate::events::ClientConnectedEvent;
 use crate::events::ClientDisconnectedEvent;
 use crate::events::ClientInputEvent;
-use crate::DataFolder;
 use crate::TICKRATE;
 
 #[derive(Resource)]

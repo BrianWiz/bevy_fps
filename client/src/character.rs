@@ -6,7 +6,14 @@ use shared::bevy_quinnet::shared::ClientId;
 use shared::character::*;
 use shared::utils::move_towards;
 
-const VISUALS_CORRECT_SPEED: f32 = 10.0;
+/// The speed at which visual offsets are corrected.
+/// Higher values result in faster corrections but may appear less smooth.
+/// Lower values provide smoother transitions but take longer to correct discrepancies.
+const VISUALS_CORRECT_SPEED: f32 = 1.0;
+
+/// Multiplier for the maximum distance the visual can move in a single frame.
+/// Higher values allow for quicker visual updates, while lower values create smoother but potentially less responsive movement.
+const VISUAL_MOVE_SPEED_MULTIPLIER: f32 = 1.5;
 
 pub fn spawn_character(
     meshes: &mut Assets<Mesh>,
@@ -75,43 +82,44 @@ pub fn move_system(
 pub fn update_locally_controlled_visuals_system(
     time: Res<Time>,
     fixed_time: Res<Time<Fixed>>,
-    mut char_state: Query<(&mut CharacterState, &Transform), With<LocallyControlled>>,
-    mut visuals: Query<
+    mut char_query: Query<(&mut CharacterState, &Transform), With<LocallyControlled>>,
+    mut visuals_query: Query<
         (&mut Transform, &CharacterVisuals),
         (With<LocallyControlled>, Without<CharacterState>),
     >,
 ) {
-    if let Ok((mut visuals_transform, char_visuals)) = visuals.get_single_mut() {
-        if let Ok((mut char_state, char_transform)) = char_state.get_mut(char_visuals.belongs_to) {
-            let time_diff = time.elapsed_seconds() - fixed_time.elapsed_seconds();
-            let fraction = time_diff / fixed_time.delta_seconds();
+    let delta_time = time.delta_seconds();
+    let fixed_delta_time = fixed_time.delta_seconds();
+    let time_diff = time.elapsed_seconds() - fixed_time.elapsed_seconds();
+    let fraction = (time_diff / fixed_delta_time).clamp(0.0, 1.0);
 
-            // first we get the final extrapolated position to where we think they will be
-            // this will be fine as long as we have decent amount of deceleration,
-            // otherwise it would be jarring when changing directions
-            let final_extrapolated_position =
-                char_transform.translation + (char_state.velocity * fixed_time.delta_seconds());
+    for (mut visuals_transform, char_visuals) in visuals_query.iter_mut() {
+        if let Ok((mut char_state, char_transform)) = char_query.get_mut(char_visuals.belongs_to) {
+            visuals_transform.translation = char_transform.translation;
+            // // Extrapolate the character's position based on current velocity
+            // let extrapolated_position =
+            //     char_transform.translation + (char_state.velocity * fixed_delta_time);
 
-            // this is where we are within the final extrapolated position and the actual position
-            let target_position = char_transform
-                .translation
-                .lerp(final_extrapolated_position, fraction);
+            // // Interpolate between current and extrapolated position
+            // let target_position = char_transform
+            //     .translation
+            //     .lerp(extrapolated_position, fraction);
 
-            // we then correct the position by the offset we've been keeping
-            let corrected_position = target_position + (char_state.visuals_offset * fraction);
+            // // Apply the visual offset for smooth corrections
+            // let corrected_position = target_position + (char_state.visuals_offset * fraction);
 
-            // then we do a pass where we move to the corrected position
-            visuals_transform.translation = move_towards(
-                visuals_transform.translation,
-                corrected_position,
-                char_state.velocity.length() * time.delta_seconds(),
-            );
+            // // Smoothly move the visual representation towards the corrected position
+            // visuals_transform.translation = move_towards(
+            //     visuals_transform.translation,
+            //     corrected_position,
+            //     char_state.velocity.length() * delta_time * VISUAL_MOVE_SPEED_MULTIPLIER,
+            // );
 
-            // we then lerp the offset to zero so we never stray too far from the actual position
-            let adjusted_offset = char_state
-                .visuals_offset
-                .lerp(Vec3::ZERO, VISUALS_CORRECT_SPEED * time.delta_seconds());
-            char_state.visuals_offset = adjusted_offset;
+            // // Gradually reduce the visual offset to prevent straying too far from the actual position
+            // let offset_reduction_factor = VISUALS_CORRECT_SPEED * delta_time;
+            // char_state.visuals_offset = char_state
+            //     .visuals_offset
+            //     .lerp(Vec3::ZERO, offset_reduction_factor);
         }
     }
 }
@@ -125,19 +133,19 @@ pub fn update_visuals_system(
         (Without<CharacterState>, Without<LocallyControlled>),
     >,
 ) {
-    for (mut visuals_transform, char_visuals) in visuals.iter_mut() {
-        if let Ok((char_state, char_transform)) = char_state.get(char_visuals.belongs_to) {
-            let time_diff = time.elapsed_seconds() - fixed_time.elapsed_seconds();
-            let fraction = time_diff / fixed_time.delta_seconds();
-            let extrapolated_position =
-                char_transform.translation + (char_state.velocity * fixed_time.delta_seconds());
-            // this is where we are within the final extrapolated position and the actual position
-            let target_position = char_transform
-                .translation
-                .lerp(extrapolated_position, fraction);
-            visuals_transform.translation = target_position;
-        }
-    }
+    // for (mut visuals_transform, char_visuals) in visuals.iter_mut() {
+    //     if let Ok((char_state, char_transform)) = char_state.get(char_visuals.belongs_to) {
+    //         let time_diff = time.elapsed_seconds() - fixed_time.elapsed_seconds();
+    //         let fraction = time_diff / fixed_time.delta_seconds();
+    //         let extrapolated_position =
+    //             char_transform.translation + (char_state.velocity * fixed_time.delta_seconds());
+    //         // this is where we are within the final extrapolated position and the actual position
+    //         let target_position = char_transform
+    //             .translation
+    //             .lerp(extrapolated_position, fraction);
+    //         visuals_transform.translation = target_position;
+    //     }
+    // }
 }
 
 pub fn update_camera_system(
