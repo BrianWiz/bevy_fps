@@ -16,12 +16,4 @@ impl CharacterSnapshot {
             },
         }
     }
-
-    pub fn apply_diff(&self, old: &CharacterSnapshot) -> CharacterSnapshot {
-        CharacterSnapshot {
-            owner_client_id: self.owner_client_id,
-            position: self.position.or(old.position),
-            velocity: self.velocity.or(old.velocity),
-        }
-    }
 }

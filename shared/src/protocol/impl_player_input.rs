@@ -19,12 +19,6 @@ impl PlayerInput {
         if self.move_right {
             wish_dir += rotation * Vec3::X;
         }
-        if self.move_up {
-            wish_dir += Vec3::Y;
-        }
-        if self.move_down {
-            wish_dir -= Vec3::Y;
-        }
         if wish_dir.length_squared() > 0.0 {
             wish_dir = wish_dir.normalize();
         }

@@ -47,6 +47,7 @@ pub fn handle_received_messages_system(world: &mut World) {
                     });
 
                     if already_played {
+                        shared::bevy::log::warn!("Received snapshot for tick {} that we already played", snapshot.tick);
                         continue;
                     }
 
@@ -56,7 +57,7 @@ pub fn handle_received_messages_system(world: &mut World) {
 
                         // owned character
                         if client_id == char_snap.owner_client_id {
-                            let mut offset = Vec3::ZERO;
+                            let mut position_before = Vec3::ZERO;
 
                             let original_yaw = if let Some(input_controller) = world.get_resource::<PlayerInputController>() {
                                 input_controller.latest_input.yaw
@@ -75,14 +76,14 @@ pub fn handle_received_messages_system(world: &mut World) {
                                     .get_single_mut(world)
                             {
                                 should_spawn_new = false;
-                                
+                                position_before = transform.translation;
                                 char_state.apply_snapshot(&char_snap, &mut transform);
-                                offset = transform.translation - char_snap.position.unwrap_or(Vec3::ZERO);
 
                                 if char_snap.position.is_some() {
                                     // we are the owner of this character
                                     // so we need to replay inputs since the last acked input the server has provided us
                                     if let Some(acked_input_id) = snapshot.acked_input_id {
+
                                         let inputs_to_replay = if let Some(input_controller) =
                                             world.get_resource::<PlayerInputController>()
                                         {
@@ -107,12 +108,25 @@ pub fn handle_received_messages_system(world: &mut World) {
                                 input_controller.latest_input.yaw = original_yaw;
                             }
 
+                            let mut position_after = Vec3::ZERO;
+
+                            if let Ok(transform) =
+                            world
+                                .query_filtered::<
+                                    &Transform,
+                                    (With<CharacterState>, With<LocallyControlled>)>(
+                                )
+                                .get_single(world)
+                            {
+                                position_after = transform.translation;
+                            }
+
                             if let Ok(mut correction) =
                                 world
                                     .query_filtered::<&mut ClientCorrection, (With<CharacterState>, With<LocallyControlled>)>()
                                     .get_single_mut(world)
                             {
-                                correction.offset += offset;
+                                correction.offset += position_after - position_before;
                             }
                         }
                         // non-owned character

@@ -10,7 +10,7 @@ pub mod components;
 mod input;
 mod net;
 
-pub const TICKRATE: u32 = 64;
+pub const TICKRATE: u32 = 128;
 pub const MOUSE_SENISITIVITY: f32 = 0.1;
 
 fn main() {

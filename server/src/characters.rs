@@ -29,6 +29,7 @@ pub fn consume_input_system(
             if client_info.inputs_to_process.is_empty() {
                 move_character(
                     client_info.last_processed_input.compute_wish_dir(),
+                    client_info.last_processed_input.jump,
                     &spatial_query,
                     &mut char_state,
                     &mut char_xform,
@@ -41,6 +42,7 @@ pub fn consume_input_system(
                 for input in client_info.inputs_to_process.iter() {
                     move_character(
                         input.compute_wish_dir(),
+                        input.jump,
                         &spatial_query,
                         &mut char_state,
                         &mut char_xform,

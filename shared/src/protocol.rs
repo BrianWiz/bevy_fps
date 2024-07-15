@@ -35,6 +35,7 @@ pub struct PlayerInput {
     pub move_right: bool,
     pub move_up: bool,
     pub move_down: bool,
+    pub jump: bool,
     pub yaw: f32,
     pub pitch: f32,
     pub fire: bool,

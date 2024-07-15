@@ -15,6 +15,9 @@ pub struct CharacterConstants {
     pub move_drag: f32,
     pub move_accel: f32,
     pub move_speed: f32,
+    pub air_speed: f32,
+    pub air_accel: f32,
+    pub jump_strength: f32,
     pub max_ground_distance: f32,
     pub max_step_height: f32,
     pub max_step_angle_degrees: f32,
@@ -24,6 +27,7 @@ pub struct CharacterConstants {
 pub struct CharacterState {
     pub owner_client_id: ClientId,
     pub velocity: Vec3,
+    pub was_grounded: bool,
     pub is_grounded: bool,
 }
 
@@ -49,6 +53,7 @@ impl CharacterState {
 #[derive(Component)]
 pub struct CharacterVisuals {
     pub belongs_to: Entity,
+    pub landing_impact_timer: f32,
 }
 
 pub fn spawn_character(
@@ -62,11 +67,15 @@ pub fn spawn_character(
                 owner_client_id: owner_peer_id,
                 velocity: Vec3::ZERO,
                 is_grounded: false,
+                was_grounded: false,
             },
             CharacterConstants {
-                move_drag: 10.0,
-                move_accel: 20.5,
+                move_drag: 30.0,
                 move_speed: 4.0,
+                move_accel: 20.5,
+                air_speed: 4.0,
+                air_accel: 0.5,
+                jump_strength: 3.0,
                 max_step_height: 0.3,
                 max_ground_distance: 0.1,
                 max_step_angle_degrees: 45.0,
@@ -86,6 +95,7 @@ pub fn spawn_character(
 
 pub fn move_character(
     wish_dir: Vec3,
+    jump: bool,
     spatial_query: &SpatialQuery,
     state: &mut CharacterState,
     transform: &mut Transform,
@@ -93,15 +103,42 @@ pub fn move_character(
     delta_seconds: f32,
 ) {
     let mut velocity = state.velocity;
+    state.was_grounded = state.is_grounded;
 
-    // accelerate
-    velocity += accelerate(
-        wish_dir,
-        constants.move_speed,
-        velocity.length(),
-        constants.move_accel,
-        delta_seconds,
-    );
+    if state.is_grounded {
+        // horizontal drag
+        velocity.x = decelerate_component(
+            velocity.x,
+            velocity.length(),
+            constants.move_drag,
+            delta_seconds,
+        );
+
+        // horizontal drag
+        velocity.z = decelerate_component(
+            velocity.z,
+            velocity.length(),
+            constants.move_drag,
+            delta_seconds,
+        );
+
+        // accelerate
+        velocity += accelerate(
+            wish_dir,
+            constants.move_speed,
+            velocity.dot(wish_dir),
+            constants.move_accel,
+            delta_seconds,
+        );
+    } else {
+        velocity += accelerate(
+            wish_dir,
+            constants.air_speed,
+            velocity.dot(wish_dir),
+            constants.air_accel,
+            delta_seconds,
+        );
+    }
 
     // apply gravity
     if !state.is_grounded {
@@ -191,22 +228,9 @@ pub fn move_character(
         let ground_angle = ground_info.normal.y.acos().to_degrees();
         if ground_angle < constants.max_step_angle_degrees {
             state.is_grounded = true;
-
-            // horizontal drag
-            velocity.x = decelerate_component(
-                velocity.x,
-                velocity.length(),
-                constants.move_drag,
-                delta_seconds,
-            );
-
-            // horizontal drag
-            velocity.z = decelerate_component(
-                velocity.z,
-                velocity.length(),
-                constants.move_drag,
-                delta_seconds,
-            );
+            if jump {
+                velocity.y = constants.jump_strength;
+            }
         }
     } else {
         state.is_grounded = false;

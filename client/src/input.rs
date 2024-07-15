@@ -8,6 +8,7 @@ use crate::components::LocallyControlled;
 #[derive(Default, Resource)]
 pub struct PlayerInputController {
     pub latest_input: PlayerInput,
+    pub latest_acked_input: Option<PlayerInput>,
     pub input_history: Vec<PlayerInput>,
     pub next_input_id: u32,
 }
@@ -65,8 +66,7 @@ pub fn update_movement_system(
     controller.latest_input.move_backward = keyboard_input.pressed(KeyCode::KeyS);
     controller.latest_input.move_left = keyboard_input.pressed(KeyCode::KeyA);
     controller.latest_input.move_right = keyboard_input.pressed(KeyCode::KeyD);
-    controller.latest_input.move_up = keyboard_input.pressed(KeyCode::Space);
-    controller.latest_input.move_down = keyboard_input.pressed(KeyCode::ControlLeft);
+    controller.latest_input.jump = keyboard_input.pressed(KeyCode::Space);
     controller.latest_input.fire = mouse_button.pressed(MouseButton::Left);
     controller.next_input_id += 1;
 }

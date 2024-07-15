@@ -6,15 +6,6 @@ use shared::bevy_quinnet::shared::ClientId;
 use shared::character::*;
 use shared::utils::move_towards;
 
-/// The speed at which visual offsets are corrected.
-/// Higher values result in faster corrections but may appear less smooth.
-/// Lower values provide smoother transitions but take longer to correct discrepancies.
-const VISUALS_CORRECT_SPEED: f32 = 6.0;
-
-/// Multiplier for the maximum distance the visual can move in a single frame.
-/// Higher values allow for quicker visual updates, while lower values create smoother but potentially less responsive movement.
-const VISUAL_MOVE_SPEED_MULTIPLIER: f32 = 1.5;
-
 pub fn spawn_character(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -26,19 +17,23 @@ pub fn spawn_character(
     let entity = shared::character::spawn_character(commands, owner_peer_id, position);
     if local {
         commands.entity(entity).insert(ClientCorrection {
-            offset: position.clone(),
+            offset: Vec3::ZERO,
             velocity: Vec3::ZERO,
         });
         commands.entity(entity).insert(LocallyControlled);
     }
 
     let mut visuals = commands.spawn((
-        CharacterVisuals { belongs_to: entity },
+        CharacterVisuals {
+            belongs_to: entity,
+            landing_impact_timer: 0.0,
+        },
         PbrBundle {
             mesh: meshes.add(Mesh::from(Cylinder {
                 radius: 0.5,
                 half_height: 0.5,
             })),
+            transform: Transform::from_translation(position.clone()),
             material: materials.add(Color::srgb(0.5, 0.5, 1.0)),
             ..default()
         },
@@ -62,6 +57,7 @@ pub fn move_system(
     {
         move_character(
             input_controller.latest_input.compute_wish_dir(),
+            input_controller.latest_input.jump,
             &spatial_query,
             &mut char_state,
             &mut char_xform,
@@ -72,52 +68,52 @@ pub fn move_system(
     }
 }
 
+const OFFSET_CORRECTION_SPEED: f32 = 20.0; // Increased for more immediate response
+const CORRECTION_SPEED: f32 = 10.0; // Increased for more immediate response
+const VERTICAL_CORRECTION_SPEED: f32 = 30.0; // Even faster vertical correction
+const LANDING_IMPACT_DURATION: f32 = 0.5; // Duration of landing impact effect in seconds
+
 pub fn update_locally_controlled_visuals_system(
     time: Res<Time>,
     fixed_time: Res<Time<Fixed>>,
     mut char_query: Query<
-        (&mut CharacterState, &mut ClientCorrection, &Transform),
+        (&CharacterState, &mut ClientCorrection, &Transform),
         With<LocallyControlled>,
     >,
     mut visuals_query: Query<
-        (&mut Transform, &CharacterVisuals),
+        (&mut Transform, &mut CharacterVisuals),
         (With<LocallyControlled>, Without<CharacterState>),
     >,
 ) {
     let delta_time = time.delta_seconds();
-    let fixed_delta_time = fixed_time.delta_seconds();
-    let time_diff = time.elapsed_seconds() - fixed_time.elapsed_seconds();
-    let fraction = (time_diff / fixed_delta_time).clamp(0.0, 1.0);
 
-    for (mut visuals_transform, char_visuals) in visuals_query.iter_mut() {
-        if let Ok((char_state, mut client_correction, char_transform)) =
+    for (mut visuals_transform, mut char_visuals) in visuals_query.iter_mut() {
+        if let Ok((char_state, mut correction, char_transform)) =
             char_query.get_mut(char_visuals.belongs_to)
         {
-            // Extrapolate the character's position based on current velocity
-            let extrapolated_position =
-                char_transform.translation + (char_state.velocity * fixed_delta_time);
+            // Calculate offset
+            let offset =
+                char_transform.translation + correction.offset - visuals_transform.translation;
 
-            // Interpolate between current and extrapolated position
-            let target_position = char_transform
-                .translation
-                .lerp(extrapolated_position, fraction);
+            // Apply correction
+            let horizontal_correction = offset.xz() * CORRECTION_SPEED * delta_time;
+            let vertical_correction = if char_visuals.landing_impact_timer > 0.0 {
+                offset.y
+            } else {
+                offset.y * VERTICAL_CORRECTION_SPEED * delta_time
+            };
 
-            // Smoothly move the visual representation towards the corrected position
-            visuals_transform.translation = move_towards(
-                visuals_transform.translation,
-                target_position + client_correction.offset,
-                char_state.velocity.length() * delta_time * VISUAL_MOVE_SPEED_MULTIPLIER,
-            );
+            visuals_transform.translation.x += horizontal_correction.x;
+            visuals_transform.translation.z += horizontal_correction.y;
+            visuals_transform.translation.y += vertical_correction;
 
-            // Gradually reduce the visual offset to prevent straying too far from the actual position
-            let offset_reduction_factor = VISUALS_CORRECT_SPEED * delta_time;
-            client_correction.offset = client_correction
+            // Update correction offset
+            correction.offset = correction
                 .offset
-                .lerp(Vec3::ZERO, offset_reduction_factor);
+                .lerp(Vec3::ZERO, OFFSET_CORRECTION_SPEED * delta_time);
         }
     }
 }
-
 pub fn update_camera_system(
     mut camera_query: Query<&mut Transform, With<Camera3d>>,
     visuals: Query<

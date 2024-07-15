@@ -225,17 +225,24 @@ pub fn snapshot_system(
                     ServerMessage::TickSnapshot(snapshot.diff(last_acked_snapshot)),
                 ) {
                     shared::bevy::log::error!("Failed to send snapshot to client: {:?}", err);
-                    return;
+                }
+            } else {
+                if let Err(err) = endpoint.send_message_on(
+                    client_info.client_id,
+                    ServerChannels::SnapshotDiff,
+                    ServerMessage::TickSnapshot(snapshot.clone()),
+                ) {
+                    shared::bevy::log::error!("Failed to send snapshot to client: {:?}", err);
                 }
             }
-        }
-        // if we don't have a snapshot to diff against, send the full snapshot
-        if let Err(err) = endpoint.send_message_on(
-            client_info.client_id,
-            ServerChannels::SnapshotDiff,
-            ServerMessage::TickSnapshot(snapshot.clone()),
-        ) {
-            shared::bevy::log::error!("Failed to send snapshot to client: {:?}", err);
+        } else {
+            if let Err(err) = endpoint.send_message_on(
+                client_info.client_id,
+                ServerChannels::SnapshotDiff,
+                ServerMessage::TickSnapshot(snapshot.clone()),
+            ) {
+                shared::bevy::log::error!("Failed to send snapshot to client: {:?}", err);
+            }
         }
     }
 
