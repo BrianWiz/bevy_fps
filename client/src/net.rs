@@ -1,13 +1,67 @@
-use crate::{input::s_consume_input, PlayerController};
+use std::collections::VecDeque;
+
+use crate::{
+    character::{spawn_visual_character, CharacterVisuals},
+    TICKRATE_HZ,
+};
 use bevy::{ecs::system::RunSystemOnce, prelude::*};
 use bevy_quinnet::{
     client::{
         certificate::CertificateVerificationMode, connection::ClientEndpointConfiguration,
         QuinnetClient,
     },
-    shared::channels::ChannelsConfiguration,
+    shared::{
+        channels::{ChannelId, ChannelType, ChannelsConfiguration},
+        ClientId,
+    },
 };
-use shared::{spawn_character, CharacterSnapshot, CharacterState, ServerMessage, ServerSnapshot};
+use shared::{
+    character::CharacterState,
+    input::PlayerInput,
+    snapshot::{CharacterSnapshot, ServerSnapshot},
+    ClientMessage, ServerMessage,
+};
+
+/// The difference in magnitude between past position and current server position
+/// that we consider a large correction for logging purposes.
+const LOG_LARGE_CORRECTION_THRESHOLD: f32 = 0.9;
+
+#[derive(Default, Resource)]
+pub struct PlayerController {
+    pub client_id: ClientId,
+    pub latest_input: PlayerInput,
+    pub input_history: Vec<PlayerInput>,
+    pub next_input_id: u64,
+    pub is_replaying: bool,
+    pub latest_snapshot: Option<ServerSnapshot>,
+}
+
+#[derive(Default, Resource)]
+pub struct NetworkMetrics {
+    pub total_diff: f32,
+    pub max_diff: f32,
+    pub diff_count: u32,
+}
+
+#[repr(u8)]
+pub enum ClientChannels {
+    Events,
+    PlayerInputs,
+}
+impl Into<ChannelId> for ClientChannels {
+    fn into(self) -> ChannelId {
+        self as ChannelId
+    }
+}
+impl ClientChannels {
+    pub fn channels_configuration() -> ChannelsConfiguration {
+        ChannelsConfiguration::from_types(vec![
+            ChannelType::OrderedReliable,
+            ChannelType::Unreliable,
+        ])
+        .unwrap()
+    }
+}
 
 pub fn is_locally_controlled(state: &CharacterState, our_client_id: u64) -> bool {
     state.owner_client_id == our_client_id
@@ -18,7 +72,7 @@ pub fn s_start_connection(mut client: ResMut<QuinnetClient>) {
         .open_connection(
             ClientEndpointConfiguration::from_strings("127.0.0.1:6000", "0.0.0.0:0").unwrap(),
             CertificateVerificationMode::SkipVerification,
-            ChannelsConfiguration::default(),
+            ClientChannels::channels_configuration(),
         )
         .unwrap();
 }
@@ -32,10 +86,11 @@ pub fn s_handle_server_messages(
         .try_receive_message::<ServerMessage>()
     {
         match message {
-            ServerMessage::ServerSnapshot(snapshot) => {
-                if snapshot.tick > controller.latest_input.server_tick {
-                    controller.snapshot_buffer.snapshots.push_back(snapshot);
+            ServerMessage::ServerSnapshot(new_snapshot) => {
+                if controller.latest_input.server_tick >= new_snapshot.tick {
+                    continue;
                 }
+                controller.latest_snapshot = Some(new_snapshot);
             }
         }
     }
@@ -55,30 +110,24 @@ pub fn s_consume_snapshot_buffer(world: &mut World) {
         time = time_res.clone();
     });
 
-    let mut snapshot = None;
+    let mut snapshot = None::<ServerSnapshot>;
     world.resource_scope(|_, mut controller: Mut<PlayerController>| {
-        snapshot = controller.snapshot_buffer.snapshots.pop_front();
-
-        if let Some(snap) = &snapshot {
-            if controller.latest_input.server_tick >= snap.tick {
-                snapshot = None; // Skip this snapshot if it's too old
-            } else {
-                controller.latest_input.server_tick = snap.tick;
-                controller.client_id = client_id;
-            }
+        // acks the snapshot
+        if let Some(snap) = &controller.latest_snapshot {
+            controller.latest_input.server_tick = snap.tick;
         }
+        controller.client_id = client_id;
+        snapshot = controller.latest_snapshot.take();
     });
 
-    if let Some(snapshot) = snapshot {
-        process_snapshot(world, snapshot, client_id);
+    if let Some(snap) = snapshot {
+        process_snapshot(world, &snap, client_id);
     }
 }
 
-fn process_snapshot(world: &mut World, snapshot: ServerSnapshot, client_id: u64) {
+fn process_snapshot(world: &mut World, snapshot: &ServerSnapshot, client_id: u64) {
     for char_snap in &snapshot.character_snapshots {
-        let mut locally_controlled = false;
-
-        // Find and update or spawn character
+        // find and update or spawn character
         let character = world
             .query::<(&mut CharacterState, &mut Transform)>()
             .iter_mut(world)
@@ -86,14 +135,22 @@ fn process_snapshot(world: &mut World, snapshot: ServerSnapshot, client_id: u64)
 
         if let Some((mut char_state, mut transform)) = character {
             update_character(&mut char_state, &mut transform, char_snap);
-            locally_controlled = is_locally_controlled(&char_state, client_id);
+            if is_locally_controlled(&char_state, client_id) && char_snap.position.is_some() {
+                replay_inputs(world, snapshot.tick, &char_snap, snapshot.acked_input_id);
+            }
         } else {
-            spawn_character(&mut world.commands(), char_snap);
+            // need to spawn these instantly without delay
+            world.resource_scope(|world, mut materials: Mut<Assets<StandardMaterial>>| {
+                world.resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
+                    spawn_visual_character(
+                        &mut world.commands(),
+                        &char_snap,
+                        &mut materials,
+                        &mut meshes,
+                    );
+                });
+            });
             world.flush();
-        }
-
-        if locally_controlled {
-            replay_inputs(world, snapshot.tick, &char_snap, snapshot.acked_input_id);
         }
     }
 }
@@ -103,8 +160,13 @@ fn update_character(
     transform: &mut Transform,
     char_snap: &CharacterSnapshot,
 ) {
-    char_state.velocity = char_snap.velocity.unwrap_or(char_state.velocity);
-    transform.translation = char_snap.position.unwrap_or(transform.translation);
+    if let Some(vel) = char_snap.velocity {
+        char_state.velocity = vel;
+    }
+
+    if let Some(pos) = char_snap.position {
+        transform.translation = pos;
+    }
 }
 
 fn replay_inputs(
@@ -117,12 +179,14 @@ fn replay_inputs(
         let mut inputs = Vec::new();
         world.resource_scope(|world, controller: Mut<PlayerController>| {
             if let Some(acked_id) = acked_input_id {
+                let mut diff = Vec3::ZERO;
+
                 if let Some(acked_input) = controller
                     .input_history
                     .iter()
                     .find(|input| input.id == acked_id)
                 {
-                    let diff = acked_input.final_position - snapshot.position.unwrap_or(Vec3::ZERO);
+                    diff = snapshot.position.unwrap_or(Vec3::ZERO) - acked_input.final_position;
                     let diff_magnitude = diff.length();
 
                     world.resource_scope(|_, mut metrics: Mut<NetworkMetrics>| {
@@ -131,13 +195,15 @@ fn replay_inputs(
                         metrics.diff_count += 1;
                     });
 
-                    info!(
-                        "Tick: {} - Diff: {} - Ours: {} - Theirs: {}",
-                        tick,
-                        diff,
-                        acked_input.final_position,
-                        snapshot.position.unwrap_or(Vec3::ZERO)
-                    );
+                    if diff_magnitude > LOG_LARGE_CORRECTION_THRESHOLD {
+                        warn!(
+                            "Large correction! - Tick: {} - Diff: {} - Ours: {} - Theirs: {}",
+                            tick,
+                            diff,
+                            acked_input.final_position,
+                            snapshot.position.unwrap_or(Vec3::ZERO)
+                        );
+                    }
                 }
 
                 inputs = controller
@@ -146,8 +212,16 @@ fn replay_inputs(
                     .filter(|input| input.id > acked_id)
                     .cloned()
                     .collect();
+
+                if let Some(mut vis) = world
+                    .query::<&mut CharacterVisuals>()
+                    .iter_mut(world)
+                    .find(|vis| vis.owner_client_id == snapshot.owner_client_id)
+                {
+                    vis.correction_offset += diff;
+                }
             } else {
-                println!("No acked input ID in snapshot");
+                warn!("No acked input ID in snapshot");
             }
         });
 
@@ -162,7 +236,7 @@ fn replay_inputs(
             controller.is_replaying = true;
             controller.latest_input = input.clone();
         });
-        world.run_system_once(s_consume_input);
+        world.run_system_once(crate::input::s_consume_move_input);
     }
 
     world.resource_scope(|_, mut controller: Mut<PlayerController>| {
@@ -171,19 +245,41 @@ fn replay_inputs(
     });
 }
 
-#[derive(Default, Resource)]
-pub struct NetworkMetrics {
-    pub total_diff: f32,
-    pub max_diff: f32,
-    pub diff_count: u32,
+pub fn s_send_input(mut client: ResMut<QuinnetClient>, mut controller: ResMut<PlayerController>) {
+    // cache the latest input
+    let input = controller.latest_input.clone();
+    controller.input_history.push(input);
+
+    // retain the last 3 seconds of inputs
+    let oldest_input_id = controller.next_input_id.saturating_sub(TICKRATE_HZ * 3);
+    controller
+        .input_history
+        .retain(|input| input.id >= oldest_input_id);
+
+    // send the last two inputs to the server
+    let inputs_to_send = controller
+        .input_history
+        .iter()
+        .rev()
+        .take(2)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    for input in inputs_to_send {
+        if let Err(err) = client.connection_mut().send_message_on(
+            ClientChannels::PlayerInputs,
+            ClientMessage::PlayerInput(input.clone()),
+        ) {
+            error!("Error sending message: {:?}", err);
+        }
+    }
 }
 
-// Periodically (e.g., every 5 seconds), log and reset these metrics
-pub fn log_network_metrics(mut metrics: ResMut<NetworkMetrics>) {
+pub fn s_log_network_metrics(mut metrics: ResMut<NetworkMetrics>) {
     if metrics.diff_count > 0 {
         let avg_diff = metrics.total_diff / metrics.diff_count as f32;
         info!(
-            "Network Metrics - Avg Diff: {}, Max Diff: {}",
+            "Network Metrics - Avg Move Diff: {}, Max Move Diff: {}",
             avg_diff, metrics.max_diff
         );
         *metrics = NetworkMetrics::default(); // Reset metrics
