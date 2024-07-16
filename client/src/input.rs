@@ -24,10 +24,17 @@ pub fn s_consume_input(
     for (char_state, char_consts, mut transform) in character.iter_mut() {
         if is_locally_controlled(char_state, controller.client_id) {
             let wish_dir = compute_wish_dir(&controller.latest_input);
-            let speed = char_consts.move_speed * fixed_time.delta_seconds();
-            let movement = wish_dir * speed;
+            let speed = char_consts.move_speed as f64 * fixed_time.delta_seconds_f64();
+            let movement = wish_dir * speed as f32;
             transform.translation += movement;
             controller.latest_input.final_position = transform.translation;
+            if !controller.is_replaying {
+                // info!(
+                //     "Fixed Time: {} | {}",
+                //     fixed_time.delta_seconds(),
+                //     1.0 / TICKRATE_HZ as f32
+                // );
+            }
         }
     }
 }
