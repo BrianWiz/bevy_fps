@@ -1,199 +1,66 @@
-use input::PlayerInputController;
-use shared::avian3d::prelude::*;
-use shared::bevy::prelude::*;
-use shared::bevy_quinnet::client::client_connected;
-use shared::bevy_quinnet::client::QuinnetClientPlugin;
-use shared::resources::DataAssetHandles;
+use bevy::prelude::*;
+use bevy::time::common_conditions::on_timer;
+use bevy_quinnet::client::client_connected;
+use bevy_quinnet::client::QuinnetClientPlugin;
+use bevy_quinnet::shared::ClientId;
+use shared::PlayerInput;
+use shared::ServerSnapshot;
+use std::collections::VecDeque;
+use std::time::Duration;
 
-mod character;
-pub mod components;
 mod input;
 mod net;
 
-pub const TICKRATE: u32 = 64;
-pub const MOUSE_SENISITIVITY: f32 = 0.1;
+const TICKRATE_HZ: u64 = 64;
+
+pub struct SnapshotBuffer {
+    pub snapshots: VecDeque<ServerSnapshot>,
+}
+
+impl Default for SnapshotBuffer {
+    fn default() -> Self {
+        SnapshotBuffer {
+            snapshots: VecDeque::new(),
+        }
+    }
+}
+
+#[derive(Default, Resource)]
+pub struct PlayerController {
+    pub client_id: ClientId,
+    pub latest_input: PlayerInput,
+    pub input_history: Vec<PlayerInput>,
+    pub next_input_id: u64,
+    pub is_replaying: bool,
+    pub last_processed_snapshot_tick: u64,
+    pub snapshot_buffer: SnapshotBuffer,
+}
 
 fn main() {
     App::new()
-        .add_plugins((
-            DefaultPlugins,
-            PhysicsPlugins::default(),
-            PhysicsDebugPlugin::default(),
-            QuinnetClientPlugin::default(),
-        ))
-        //====================================================
-        // systems at startup
-        //====================================================
-        .add_systems(Startup, (net::start_connection_system, setup_system))
-        //====================================================
-        // systems updating every tick
-        //====================================================
+        .add_plugins(DefaultPlugins)
+        .add_plugins(QuinnetClientPlugin::default())
+        .add_systems(Startup, (setup, net::s_start_connection).chain())
         .add_systems(
             Update,
-            (
-                input::update_rotation_system,
-                character::update_locally_controlled_visuals_system,
-                character::update_visuals_system,
-                character::update_camera_system,
-            )
-                .chain(),
+            (net::log_network_metrics.run_if(on_timer(Duration::from_secs(5))),).chain(),
         )
-        .add_systems(PostUpdate, (net::on_app_exit_system,).chain())
-        //====================================================
-        // systems updating at the fixed tickrate
-        //====================================================
-        .insert_resource(Time::<Fixed>::from_hz(TICKRATE as f64))
+        .insert_resource(Time::<Fixed>::from_hz(TICKRATE_HZ as f64))
         .add_systems(
             FixedUpdate,
             (
-                net::handle_client_events_system,
-                net::handle_received_messages_system.run_if(client_connected),
-                input::update_movement_system,
-                input::update_history_system,
-                character::despawn_system,
-                character::move_system,
-                net::send_input_system.run_if(client_connected),
+                net::s_handle_server_messages,
+                net::s_consume_snapshot_buffer,
+                input::s_gather_movement_input,
+                input::s_consume_input,
+                input::s_send_input,
             )
-                .chain(),
+                .chain()
+                .run_if(client_connected),
         )
-        //====================================================
-        // resources
-        //====================================================
-        .insert_resource(PlayerInputController::default())
-        .init_resource::<DataAssetHandles>()
-        //====================================================
-        // assets
-        //====================================================
-        .init_asset::<shared::weapons::WeaponConfig>()
-        //====================================================
-        // events
-        //====================================================
-        .add_event::<shared::character::CharacterDespawnEvent>()
+        .init_resource::<PlayerController>()
+        .init_resource::<net::NetworkMetrics>()
         .run();
 }
 
-fn setup_system(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    // camera
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_translation(Vec3::new(0.0, 1.5, 5.0)),
-        projection: Projection::Perspective(PerspectiveProjection {
-            fov: 90.0_f32.to_radians(),
-            ..default()
-        }),
-        ..default()
-    });
-
-    // floor
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Mesh::from(Cuboid {
-                half_size: Vec3::new(5.0, 0.5, 5.0),
-            })),
-            material: materials.add(Color::srgb(0.3, 0.5, 0.3)),
-            transform: Transform::from_translation(Vec3::new(0.0, -0.5, 0.0)),
-            ..default()
-        },
-        Collider::cuboid(10.0, 1.0, 10.0),
-        RigidBody::Static,
-    ));
-
-    // wall 1.
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Mesh::from(Cuboid {
-                half_size: Vec3::new(0.5, 2.0, 5.0),
-            })),
-            material: materials.add(Color::srgb(0.5, 0.3, 0.3)),
-            transform: Transform::from_translation(Vec3::new(-5.0, 2.0, 0.0)),
-            ..default()
-        },
-        Collider::cuboid(1.0, 4.0, 10.0),
-        RigidBody::Static,
-    ));
-
-    // wall 2.
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Mesh::from(Cuboid {
-                half_size: Vec3::new(0.5, 2.0, 5.0),
-            })),
-            material: materials.add(Color::srgb(0.3, 0.3, 0.5)),
-            transform: Transform::from_translation(Vec3::new(5.0, 2.0, 0.0)),
-            ..default()
-        },
-        Collider::cuboid(1.0, 4.0, 10.0),
-        RigidBody::Static,
-    ));
-
-    // wall 3.
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Mesh::from(Cuboid {
-                half_size: Vec3::new(5.0, 2.0, 0.5),
-            })),
-            material: materials.add(Color::srgb(0.3, 0.5, 0.5)),
-            transform: Transform::from_translation(Vec3::new(0.0, 2.0, -5.0)),
-            ..default()
-        },
-        Collider::cuboid(10.0, 4.0, 1.0),
-        RigidBody::Static,
-    ));
-
-    // wall 4.
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Mesh::from(Cuboid {
-                half_size: Vec3::new(5.0, 2.0, 0.5),
-            })),
-            material: materials.add(Color::srgb(0.5, 0.5, 0.3)),
-            transform: Transform::from_translation(Vec3::new(0.0, 2.0, 5.0)),
-            ..default()
-        },
-        Collider::cuboid(10.0, 4.0, 1.0),
-        RigidBody::Static,
-    ));
-
-    // pillar 1.
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Mesh::from(Cylinder {
-                radius: 0.5,
-                half_height: 4.0,
-                ..Default::default()
-            })),
-            material: materials.add(Color::srgb(0.5, 0.5, 0.5)),
-            transform: Transform::from_translation(Vec3::new(-1.0, 2.0, -1.0)),
-            ..default()
-        },
-        Collider::cylinder(0.5, 8.0),
-        RigidBody::Static,
-    ));
-
-    // small step
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Mesh::from(Cuboid {
-                half_size: Vec3::new(1.0, 0.1, 1.0),
-            })),
-            material: materials.add(Color::srgb(0.5, 0.5, 0.5)),
-            transform: Transform::from_translation(Vec3::new(1.0, 0.05, 1.0)),
-            ..default()
-        },
-        Collider::cuboid(2.0, 0.2, 2.0),
-        RigidBody::Static,
-    ));
-
-    // light
-    commands.spawn(PointLightBundle {
-        transform: Transform::from_translation(Vec3::new(4.0, 8.0, 4.0)),
-        point_light: PointLight {
-            shadows_enabled: true,
-            ..default()
-        },
-        ..default()
-    });
-}
+fn setup(mut commands: Commands) {}

@@ -1,58 +1,11 @@
-use shared::bevy::input::mouse::MouseMotion;
-use shared::bevy::prelude::*;
-use shared::character::*;
-use shared::protocol::*;
+use bevy::prelude::*;
+use bevy_quinnet::client::QuinnetClient;
+use shared::{compute_wish_dir, CharacterConstants, CharacterState, ClientMessage};
 
-use crate::components::LocallyControlled;
+use crate::{net::is_locally_controlled, PlayerController, TICKRATE_HZ};
 
-#[derive(Default, Resource)]
-pub struct PlayerInputController {
-    pub latest_input: PlayerInput,
-    pub input_history: Vec<PlayerInput>,
-    pub next_input_id: u32,
-}
-
-impl PlayerInputController {
-    pub fn inputs_after(&self, since_input_id: u32) -> Vec<PlayerInput> {
-        self.input_history
-            .iter()
-            .filter(|input| input.id > since_input_id)
-            .cloned()
-            .collect::<Vec<PlayerInput>>()
-    }
-
-    pub fn get_input(&self, input_id: u32) -> Option<&PlayerInput> {
-        self.input_history.iter().find(|input| input.id == input_id)
-    }
-}
-
-pub fn update_rotation_system(
-    mut mouse_motion: EventReader<MouseMotion>,
-    mut character_transform: Query<&mut Transform, (With<LocallyControlled>, With<CharacterState>)>,
-    mut controller: ResMut<PlayerInputController>,
-) {
-    if let Ok(mut character_transform) = character_transform.get_single_mut() {
-        for event in mouse_motion.read() {
-            // Extract current yaw and pitch
-            let (yaw, pitch, _) = character_transform.rotation.to_euler(EulerRot::YXZ);
-
-            // Apply new rotations
-            let new_yaw = yaw - event.delta.x.to_radians() * crate::MOUSE_SENISITIVITY;
-            let new_pitch = (pitch - event.delta.y.to_radians() * crate::MOUSE_SENISITIVITY)
-                .clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
-
-            // Reconstruct rotation with locked roll
-            character_transform.rotation = Quat::from_euler(EulerRot::YXZ, new_yaw, new_pitch, 0.0);
-
-            controller.latest_input.yaw = new_yaw;
-            controller.latest_input.pitch = new_pitch;
-        }
-    }
-}
-
-pub fn update_movement_system(
-    mut controller: ResMut<PlayerInputController>,
-    mouse_button: Res<ButtonInput<MouseButton>>,
+pub fn s_gather_movement_input(
+    mut controller: ResMut<PlayerController>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
 ) {
     controller.latest_input.id = controller.next_input_id;
@@ -60,18 +13,40 @@ pub fn update_movement_system(
     controller.latest_input.move_backward = keyboard_input.pressed(KeyCode::KeyS);
     controller.latest_input.move_left = keyboard_input.pressed(KeyCode::KeyA);
     controller.latest_input.move_right = keyboard_input.pressed(KeyCode::KeyD);
-    controller.latest_input.move_up = keyboard_input.pressed(KeyCode::Space);
-    controller.latest_input.move_down = keyboard_input.pressed(KeyCode::ControlLeft);
-    controller.latest_input.fire = mouse_button.pressed(MouseButton::Left);
     controller.next_input_id += 1;
 }
 
-pub fn update_history_system(mut controller: ResMut<PlayerInputController>) {
-    let latest_input = controller.latest_input.clone();
-    controller.input_history.push(latest_input);
+pub fn s_consume_input(
+    mut controller: ResMut<PlayerController>,
+    mut character: Query<(&CharacterState, &CharacterConstants, &mut Transform)>,
+    fixed_time: Res<Time<Fixed>>,
+) {
+    for (char_state, char_consts, mut transform) in character.iter_mut() {
+        if is_locally_controlled(char_state, controller.client_id) {
+            let wish_dir = compute_wish_dir(&controller.latest_input);
+            let speed = char_consts.move_speed * fixed_time.delta_seconds();
+            let movement = wish_dir * speed;
+            transform.translation += movement;
+            controller.latest_input.final_position = transform.translation;
+        }
+    }
+}
 
-    // retain only the last 2 seconds of input history
-    let oldest_input_id = controller.next_input_id.saturating_sub(crate::TICKRATE * 2);
+pub fn s_send_input(mut client: ResMut<QuinnetClient>, mut controller: ResMut<PlayerController>) {
+    // send the input to the server
+    if let Err(err) = client
+        .connection_mut()
+        .send_message(ClientMessage::PlayerInput(controller.latest_input.clone()))
+    {
+        println!("Error sending message: {:?}", err);
+    }
+
+    // cache the input
+    let input = controller.latest_input.clone();
+    controller.input_history.push(input);
+
+    // retain the last 3 seconds of inputs
+    let oldest_input_id = controller.next_input_id.saturating_sub(TICKRATE_HZ * 3);
     controller
         .input_history
         .retain(|input| input.id >= oldest_input_id);

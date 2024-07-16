@@ -1,157 +1,42 @@
-use shared::avian3d::prelude::*;
-use shared::bevy::app::ScheduleRunnerPlugin;
-use shared::bevy::asset::LoadedFolder;
-use shared::bevy::log::LogPlugin;
-use shared::bevy::prelude::*;
-use shared::bevy_common_assets::ron::RonAssetPlugin;
-use shared::bevy_quinnet::server::QuinnetServerPlugin;
-use shared::resources::DataAssetHandles;
-use shared::weapons::WeaponConfig;
-use std::time::Duration;
+use std::collections::VecDeque;
 
-mod characters;
-mod events;
-mod gamemode;
+use bevy::{log::LogPlugin, prelude::*};
+use bevy_quinnet::{server::QuinnetServerPlugin, shared::ClientId};
+use shared::PlayerInput;
+
+mod input;
 mod net;
 
-const TICKRATE: u32 = 64;
+const TICKRATE_HZ: u64 = 64;
 
-#[derive(Resource, Default, DerefMut, Deref)]
-pub struct DataFolder(Handle<LoadedFolder>);
+#[derive(Resource, Default)]
+struct ServerState {
+    pub tick: u64,
+    pub clients: Vec<ClientInfo>,
+}
+struct ClientInfo {
+    pub client_id: ClientId,
+    pub inputs: VecDeque<PlayerInput>,
+    pub last_processed_input: Option<PlayerInput>,
+}
 
 fn main() {
     App::new()
-        .add_plugins((
-            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
-                1.0 / 200.0,
-            ))),
-            AssetPlugin::default(),
-            HierarchyPlugin::default(), // needed by Avian
-            RonAssetPlugin::<WeaponConfig>::new(&["weapon.ron"]),
-            LogPlugin::default(),
-            QuinnetServerPlugin::default(),
-            PhysicsPlugins::default(),
-        ))
-        //====================================================
-        // systems at startup
-        //====================================================
-        .add_systems(Startup, (setup, net::start_listening_system))
-        //====================================================
-        // systems updating at the fixed tickrate
-        //====================================================
-        .insert_resource(Time::<Fixed>::from_hz(TICKRATE as f64))
+        .add_plugins(MinimalPlugins)
+        .add_plugins(LogPlugin::default())
+        .add_plugins(QuinnetServerPlugin::default())
+        .add_systems(Startup, (net::s_start_listening).chain())
+        .insert_resource(Time::<Fixed>::from_hz(TICKRATE_HZ as f64))
         .add_systems(
             FixedUpdate,
             (
-                net::handle_received_messages_system,
-                net::handle_server_events_system,
-                net::handle_client_connected_system,
-                net::handle_client_disconnected_system,
-                net::handle_client_input_system,
-                gamemode::handle_client_connected_system,
-                characters::consume_input_system,
-                characters::despawn_system,
-                net::snapshot_system,
-                net::data_load_system,
+                net::s_client_disconnected_system,
+                net::s_handle_client_messages,
+                input::s_consume_inputs,
+                net::s_send_snapshot,
             )
                 .chain(),
         )
-        //====================================================
-        // resources
-        //====================================================
-        .insert_resource(net::Application::default())
-        .insert_resource(SceneSpawner::default())
-        .insert_resource(Assets::<Mesh>::default()) // needed by Avian
-        .insert_resource(DataFolder::default())
-        .init_resource::<DataAssetHandles>()
-        //====================================================
-        // events
-        //====================================================
-        .add_event::<events::ClientConnectedEvent>()
-        .add_event::<events::ClientDisconnectedEvent>()
-        .add_event::<events::ClientInputEvent>()
-        .add_event::<shared::character::CharacterDespawnEvent>()
-        //====================================================
+        .insert_resource(ServerState::default())
         .run();
-}
-
-fn setup(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut data_asset_handles: ResMut<DataAssetHandles>,
-) {
-    data_asset_handles.weapon_configs.insert(
-        "rocket_launcher".into(),
-        asset_server.load::<WeaponConfig>("data/rocket_launcher.weapon.ron"),
-    );
-
-    // floor
-    commands.spawn((
-        SpatialBundle {
-            transform: Transform::from_translation(Vec3::new(0.0, -0.5, 0.0)),
-            ..default()
-        },
-        Collider::cuboid(10.0, 1.0, 10.0),
-        RigidBody::Static,
-    ));
-
-    // wall 1.
-    commands.spawn((
-        SpatialBundle {
-            transform: Transform::from_translation(Vec3::new(-5.0, 2.0, 0.0)),
-            ..default()
-        },
-        Collider::cuboid(1.0, 4.0, 10.0),
-        RigidBody::Static,
-    ));
-
-    // wall 2.
-    commands.spawn((
-        SpatialBundle {
-            transform: Transform::from_translation(Vec3::new(5.0, 2.0, 0.0)),
-            ..default()
-        },
-        Collider::cuboid(1.0, 4.0, 10.0),
-        RigidBody::Static,
-    ));
-
-    // wall 3.
-    commands.spawn((
-        SpatialBundle {
-            transform: Transform::from_translation(Vec3::new(0.0, 2.0, -5.0)),
-            ..default()
-        },
-        Collider::cuboid(10.0, 4.0, 1.0),
-        RigidBody::Static,
-    ));
-
-    // wall 4.
-    commands.spawn((
-        SpatialBundle {
-            transform: Transform::from_translation(Vec3::new(0.0, 2.0, 5.0)),
-            ..default()
-        },
-        Collider::cuboid(10.0, 4.0, 1.0),
-        RigidBody::Static,
-    ));
-
-    // pillar 1.
-    commands.spawn((
-        SpatialBundle {
-            transform: Transform::from_translation(Vec3::new(-1.0, 2.0, -1.0)),
-            ..default()
-        },
-        Collider::cylinder(0.5, 8.0),
-        RigidBody::Static,
-    ));
-
-    // small step
-    commands.spawn((
-        SpatialBundle {
-            transform: Transform::from_translation(Vec3::new(1.0, 0.05, 1.0)),
-            ..default()
-        },
-        Collider::cuboid(2.0, 0.2, 2.0),
-        RigidBody::Static,
-    ));
 }

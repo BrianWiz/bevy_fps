@@ -1,200 +1,201 @@
-use std::thread::sleep;
-use std::time::Duration;
-
-use crate::character::{self, spawn_character};
-use crate::input::PlayerInputController;
-use shared::bevy::ecs::system::RunSystemOnce;
-use shared::bevy::prelude::*;
-use shared::bevy_quinnet::client::certificate::CertificateVerificationMode;
-use shared::bevy_quinnet::client::connection::{
-    ClientEndpointConfiguration, ConnectionEvent, ConnectionFailedEvent,
+use crate::{input::s_consume_input, PlayerController};
+use bevy::{ecs::system::RunSystemOnce, prelude::*};
+use bevy_quinnet::{
+    client::{
+        certificate::CertificateVerificationMode, connection::ClientEndpointConfiguration,
+        QuinnetClient,
+    },
+    shared::channels::ChannelsConfiguration,
 };
-use shared::bevy_quinnet::client::QuinnetClient;
-use shared::character::{CharacterDespawnEvent, CharacterState};
-use shared::protocol::{ClientChannels, ClientMessage, ServerMessage};
-use shared::resources::DataAssetHandles;
+use shared::{spawn_character, CharacterSnapshot, CharacterState, ServerMessage, ServerSnapshot};
 
-pub fn handle_received_messages_system(world: &mut World) {
-    world.resource_scope(|world, mut client: Mut<QuinnetClient>| {
-        let client_id = client.connection().client_id().unwrap_or(0);
-        let endpoint = client.connection_mut();
+pub fn is_locally_controlled(state: &CharacterState, our_client_id: u64) -> bool {
+    state.owner_client_id == our_client_id
+}
 
-        while let Some(message) = endpoint.try_receive_message::<ServerMessage>() {
-            match message {
-                // we received a list of weapon configs, add them as assets
-                (_channel_id, ServerMessage::WeaponConfig(weapon_config)) => {
-                    world.resource_scope(|world, asset_server: Mut<AssetServer>| {
-                        world.resource_scope(|_, mut data_asset_handles: Mut<DataAssetHandles>| {
-                            // build up new assets
-                            shared::bevy::log::info!("Received weapon config: {:?}", weapon_config);
-                            data_asset_handles
-                                .weapon_configs
-                                .insert(weapon_config.tag.clone(), asset_server.add(weapon_config));
-                        });
-                    });
-                }
+pub fn s_start_connection(mut client: ResMut<QuinnetClient>) {
+    client
+        .open_connection(
+            ClientEndpointConfiguration::from_strings("127.0.0.1:6000", "0.0.0.0:0").unwrap(),
+            CertificateVerificationMode::SkipVerification,
+            ChannelsConfiguration::default(),
+        )
+        .unwrap();
+}
 
-                // we received a snapshot of the game state
-                (_channel_id, ServerMessage::TickSnapshot(snapshot)) => {
-                    // query for existing characters
-                    let mut existing_characters =
-                        world.query::<(&mut CharacterState, &mut Transform)>();
-
-                    for char_snap in &snapshot.characters {
-                        let existing_char_xform_pair = existing_characters
-                            .iter_mut(world)
-                            .find(|(char, _)| char.owner_client_id == char_snap.owner_client_id);
-
-                        if let Some((mut existing_char_state, mut existing_char_xform)) =
-                            existing_char_xform_pair
-                        {
-                            if existing_char_state.is_locally_controlled(client_id) {
-                                existing_char_state
-                                    .apply_snapshot(&char_snap, &mut existing_char_xform);
-                                if char_snap.position.is_none() {
-                                    continue;
-                                }
-                                // we are the owner of this character
-                                // so we need to replay inputs since the last acked input the server has provided us
-                                if let Some(acked_input_id) = snapshot.acked_input_id {
-                                    existing_char_state.visuals_offset +=
-                                        char_snap.position.unwrap_or(Vec3::ZERO)
-                                            - existing_char_xform.translation;
-
-                                    // let acked_input = world
-                                    //     .get_resource::<PlayerInputController>()
-                                    //     .and_then(|input_controller| {
-                                    //         input_controller.get_input(acked_input_id)
-                                    //     });
-
-                                    // if let Some(acked_input) = acked_input {
-                                    //     println!(
-                                    //         "{} | {} | {} ",
-                                    //         acked_input.final_position,
-                                    //         char_snap.position.unwrap_or(Vec3::ZERO),
-                                    //         acked_input
-                                    //             .final_position
-                                    //             .distance(char_snap.position.unwrap_or(Vec3::ZERO))
-                                    //     );
-                                    // }
-                                    let inputs_to_replay = if let Some(input_controller) =
-                                        world.get_resource::<PlayerInputController>()
-                                    {
-                                        input_controller.inputs_after(acked_input_id)
-                                    } else {
-                                        Vec::new()
-                                    };
-
-                                    for input in inputs_to_replay {
-                                        if let Some(mut input_controller) =
-                                            world.get_resource_mut::<PlayerInputController>()
-                                        {
-                                            input_controller.latest_input = input;
-                                        }
-
-                                        world.run_system_once(character::move_system);
-                                    }
-                                }
-                            } else {
-                                existing_char_state
-                                    .apply_snapshot(&char_snap, &mut existing_char_xform);
-                            }
-                        } else {
-                            world.resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
-                                world.resource_scope(
-                                    |world, mut materials: Mut<Assets<StandardMaterial>>| {
-                                        let mut commands = world.commands();
-                                        spawn_character(
-                                            &mut meshes,
-                                            &mut materials,
-                                            &mut commands,
-                                            char_snap.owner_client_id,
-                                            &char_snap.position.unwrap_or(Vec3::ZERO),
-                                            char_snap.owner_client_id == client_id,
-                                        );
-                                        world.flush();
-                                    },
-                                );
-                            });
-                        }
-                    }
-
-                    // handle deletions, any character that isn't in the snapshot should be deleted
-                    let mut deletions = Vec::new();
-                    for (char_state, _) in existing_characters.iter(world) {
-                        if snapshot.characters.iter().all(|char_snap| {
-                            char_snap.owner_client_id != char_state.owner_client_id
-                        }) {
-                            deletions.push(char_state.owner_client_id);
-                        }
-                    }
-                    for client_id in deletions {
-                        world.send_event(CharacterDespawnEvent {
-                            client_id: client_id,
-                        });
-                    }
-
-                    // Ack the server tick/snapshot!
-                    world.resource_scope(|_, mut input_controller: Mut<PlayerInputController>| {
-                        input_controller.latest_input.server_tick = Some(snapshot.tick);
-                    });
+pub fn s_handle_server_messages(
+    mut client: ResMut<QuinnetClient>,
+    mut controller: ResMut<PlayerController>,
+) {
+    while let Some((_, message)) = client
+        .connection_mut()
+        .try_receive_message::<ServerMessage>()
+    {
+        match message {
+            ServerMessage::ServerSnapshot(snapshot) => {
+                if snapshot.tick > controller.latest_input.server_tick {
+                    controller.snapshot_buffer.snapshots.push_back(snapshot);
                 }
             }
         }
+    }
+}
+
+pub fn s_consume_snapshot_buffer(world: &mut World) {
+    let mut client_id = 0;
+    let mut time = Time::default();
+
+    world.resource_scope(|_, client: Mut<QuinnetClient>| {
+        if let Some(id) = client.connection().client_id() {
+            client_id = id;
+        }
+    });
+
+    world.resource_scope(|_, time_res: Mut<Time>| {
+        time = time_res.clone();
+    });
+
+    let mut snapshot = None;
+    world.resource_scope(|_, mut controller: Mut<PlayerController>| {
+        snapshot = controller.snapshot_buffer.snapshots.pop_front();
+
+        if let Some(snap) = &snapshot {
+            if controller.last_processed_snapshot_tick >= snap.tick {
+                snapshot = None; // Skip this snapshot if it's too old
+            } else {
+                controller.latest_input.server_tick = snap.tick;
+                controller.client_id = client_id;
+            }
+        }
+    });
+
+    if let Some(snapshot) = snapshot {
+        process_snapshot(world, snapshot, client_id);
+    }
+}
+
+fn process_snapshot(world: &mut World, snapshot: ServerSnapshot, client_id: u64) {
+    for char_snap in &snapshot.character_snapshots {
+        let mut locally_controlled = false;
+
+        // Find and update or spawn character
+        let character = world
+            .query::<(&mut CharacterState, &mut Transform)>()
+            .iter_mut(world)
+            .find(|(char, _)| char.owner_client_id == char_snap.owner_client_id);
+
+        if let Some((mut char_state, mut transform)) = character {
+            update_character(&mut char_state, &mut transform, char_snap);
+            locally_controlled = is_locally_controlled(&char_state, client_id);
+        } else {
+            spawn_character(&mut world.commands(), char_snap);
+            world.flush();
+        }
+
+        if locally_controlled {
+            replay_inputs(world, snapshot.tick, &char_snap, snapshot.acked_input_id);
+        }
+    }
+}
+
+fn update_character(
+    char_state: &mut CharacterState,
+    transform: &mut Transform,
+    char_snap: &CharacterSnapshot,
+) {
+    char_state.owner_client_id = char_snap.owner_client_id;
+    char_state.velocity = char_snap.velocity.unwrap_or(char_state.velocity);
+
+    let server_position = char_snap.position.unwrap_or(transform.translation);
+    let diff = server_position - transform.translation;
+
+    if diff.length() > 0.01 {
+        transform.translation =
+            server_position + char_state.velocity.normalize_or_zero() * diff.length();
+    } else {
+        transform.translation = server_position;
+    }
+}
+
+fn replay_inputs(
+    world: &mut World,
+    tick: u64,
+    snapshot: &CharacterSnapshot,
+    acked_input_id: Option<u64>,
+) {
+    let inputs_to_replay = {
+        let mut inputs = Vec::new();
+        world.resource_scope(|world, controller: Mut<PlayerController>| {
+            if let Some(acked_id) = acked_input_id {
+                if let Some(acked_input) = controller
+                    .input_history
+                    .iter()
+                    .find(|input| input.id == acked_id)
+                {
+                    let diff = acked_input.final_position - snapshot.position.unwrap_or(Vec3::ZERO);
+                    let diff_magnitude = diff.length();
+
+                    world.resource_scope(|_, mut metrics: Mut<NetworkMetrics>| {
+                        metrics.total_diff += diff_magnitude;
+                        metrics.max_diff = metrics.max_diff.max(diff_magnitude);
+                        metrics.diff_count += 1;
+                    });
+
+                    info!(
+                        "Tick: {} - Diff: {} - Ours: {} - Theirs: {}",
+                        tick,
+                        diff,
+                        acked_input.final_position,
+                        snapshot.position.unwrap_or(Vec3::ZERO)
+                    );
+                }
+
+                inputs = controller
+                    .input_history
+                    .iter()
+                    .filter(|input| input.id > acked_id)
+                    .cloned()
+                    .collect();
+            } else {
+                println!("No acked input ID in snapshot");
+            }
+        });
+
+        inputs
+    };
+
+    let latest_input = world
+        .resource_scope(|_, controller: Mut<PlayerController>| controller.latest_input.clone());
+
+    for input in inputs_to_replay {
+        world.resource_scope(|_, mut controller: Mut<PlayerController>| {
+            controller.is_replaying = true;
+            controller.latest_input = input.clone();
+        });
+        world.run_system_once(s_consume_input);
+    }
+
+    world.resource_scope(|_, mut controller: Mut<PlayerController>| {
+        controller.is_replaying = false;
+        controller.latest_input = latest_input;
     });
 }
 
-pub fn handle_client_events_system(
-    mut connection_events: EventReader<ConnectionEvent>,
-    mut connection_failed_events: EventReader<ConnectionFailedEvent>,
-    client: ResMut<QuinnetClient>,
-) {
-    if !connection_events.is_empty() {
-        // We are connected
-        let username: String = "Unnamed Player".into();
-        shared::bevy::log::info!("Connected to server. With username: {}", username);
-        if let Err(err) = client
-            .connection()
-            .send_message_on(ClientChannels::Events, ClientMessage::Connect { username })
-        {
-            shared::bevy::log::error!("Failed to send join message: {:?}", err);
-        }
-        connection_events.clear();
-    }
-    for ev in connection_failed_events.read() {
-        shared::bevy::log::error!("Connection failed: {:?}", ev.err);
-    }
+#[derive(Default, Resource)]
+pub struct NetworkMetrics {
+    pub total_diff: f32,
+    pub max_diff: f32,
+    pub diff_count: u32,
 }
 
-pub fn start_connection_system(mut client: ResMut<QuinnetClient>) {
-    if let Err(err) = client.open_connection(
-        ClientEndpointConfiguration::from_strings("127.0.0.1:7777", "0.0.0.0:0").unwrap(),
-        CertificateVerificationMode::SkipVerification,
-        ClientChannels::channels_configuration(),
-    ) {
-        shared::bevy::log::error!("Failed to open connection: {:?}", err);
-    }
-}
-
-pub fn send_input_system(
-    client: ResMut<QuinnetClient>,
-    input_controller: Res<PlayerInputController>,
-) {
-    if let Err(err) = client.connection().send_message_on(
-        ClientChannels::PlayerInputs,
-        ClientMessage::PlayerInput(input_controller.latest_input.clone()),
-    ) {
-        shared::bevy::log::error!("Failed to send input: {:?}", err);
-    }
-}
-
-pub fn on_app_exit_system(app_exit_events: EventReader<AppExit>, client: Res<QuinnetClient>) {
-    if !app_exit_events.is_empty() {
-        client
-            .connection()
-            .send_message(ClientMessage::Disconnect {})
-            .unwrap();
-        // TODO Clean: event to let the async client send his last messages.
-        sleep(Duration::from_secs_f32(0.5));
+// Periodically (e.g., every 5 seconds), log and reset these metrics
+pub fn log_network_metrics(mut metrics: ResMut<NetworkMetrics>) {
+    if metrics.diff_count > 0 {
+        let avg_diff = metrics.total_diff / metrics.diff_count as f32;
+        info!(
+            "Network Metrics - Avg Diff: {}, Max Diff: {}",
+            avg_diff, metrics.max_diff
+        );
+        *metrics = NetworkMetrics::default(); // Reset metrics
     }
 }

@@ -1,6 +1,0 @@
-(
-    tag: "rocket_launcher", // "tag" is a unique identifier for the weapon, it can be used to reference the weapon in the game code
-    name: "Rocket Launcher", // "name" is the name of the weapon that will be displayed in the game
-    damage: 100,
-    fire_rate_ms: 750,
-)
