@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy::time::common_conditions::on_timer;
+use bevy::winit::WinitSettings;
 use bevy_quinnet::client::client_connected;
 use bevy_quinnet::client::QuinnetClientPlugin;
 use bevy_quinnet::shared::ClientId;
@@ -32,13 +33,16 @@ pub struct PlayerController {
     pub input_history: Vec<PlayerInput>,
     pub next_input_id: u64,
     pub is_replaying: bool,
-    pub last_processed_snapshot_tick: u64,
     pub snapshot_buffer: SnapshotBuffer,
 }
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
+        .insert_resource(WinitSettings {
+            focused_mode: bevy::winit::UpdateMode::Continuous,
+            unfocused_mode: bevy::winit::UpdateMode::Continuous,
+        })
         .add_plugins(QuinnetClientPlugin::default())
         .add_systems(Startup, (setup, net::s_start_connection).chain())
         .add_systems(

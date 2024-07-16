@@ -60,7 +60,7 @@ pub fn s_consume_snapshot_buffer(world: &mut World) {
         snapshot = controller.snapshot_buffer.snapshots.pop_front();
 
         if let Some(snap) = &snapshot {
-            if controller.last_processed_snapshot_tick >= snap.tick {
+            if controller.latest_input.server_tick >= snap.tick {
                 snapshot = None; // Skip this snapshot if it's too old
             } else {
                 controller.latest_input.server_tick = snap.tick;
