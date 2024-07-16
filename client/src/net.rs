@@ -103,18 +103,8 @@ fn update_character(
     transform: &mut Transform,
     char_snap: &CharacterSnapshot,
 ) {
-    char_state.owner_client_id = char_snap.owner_client_id;
     char_state.velocity = char_snap.velocity.unwrap_or(char_state.velocity);
-
-    let server_position = char_snap.position.unwrap_or(transform.translation);
-    let diff = server_position - transform.translation;
-
-    if diff.length() > 0.01 {
-        transform.translation =
-            server_position + char_state.velocity.normalize_or_zero() * diff.length();
-    } else {
-        transform.translation = server_position;
-    }
+    transform.translation = char_snap.position.unwrap_or(transform.translation);
 }
 
 fn replay_inputs(
